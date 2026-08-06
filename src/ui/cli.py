@@ -1,0 +1,86 @@
+"""Console UI helpers (DEVELOPMENT_PLAN.md §9 ``ui/cli.py``)."""
+from __future__ import annotations
+
+import json
+
+from src.telemetry.models import Sample
+
+
+def force_utf8_stdout() -> None:
+    """Make Ω/µ/± printable on Windows consoles (Pi is already UTF-8)."""
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+BANNER = r"""
+ RADWI Cable-Quality Analyzer  (rule-based engine v1)
+ Charger -> [TEST CABLE] -> analyzer -> phone
+"""
+
+
+def print_banner() -> None:
+    print(BANNER)
+
+
+def print_self_check(results: dict) -> None:
+    print("\n--- SELF-CHECK ---")
+    ok = True
+    for key, label in (
+        ("ina219", "INA219 on I2C"),
+        ("voltage", "Bus voltage ~5 V"),
+        ("pwr_ok", "CH224K PWR_OK (PD contract)"),
+    ):
+        passed = bool(results.get(key))
+        ok = ok and passed
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+    if "v_reading" in results:
+        print(f"  V_reading = {results['v_reading']:.3f} V  I = {results['i_reading'] * 1000:.1f} mA")
+    if "note" in results:
+        print(f"  note: {results['note']}")
+    print(f"  RESULT: {'ALL PASS - ready for calibrate.py' if ok else 'FIX BEFORE CONTINUING'}\n")
+
+
+def print_probe(probe: dict) -> None:
+    print("\n--- PROBE (multi-voltage cable characterization) ---")
+    for step in probe.get("steps", []):
+        print(
+            f"  V_target={step['v_target']:>5.1f} V  I={step['i']:>4.2f} A  "
+            f"V_load={step['v_load']:.3f} V  R_loop={step['r_loop_mohm']:>7.1f} mΩ  "
+            f"R_cable={step['r_cable_mohm']:>7.1f} mΩ"
+        )
+    blocked = probe.get("pd_blocked") or []
+    if blocked:
+        print(f"  !! PD negotiation FAILED at: {blocked} V  (cable blocks CC/PD signaling)")
+    heat = probe.get("dR_dt_mOhm_per_min")
+    if heat is not None:
+        print(f"  heating dR/dt over {probe.get('heat_hold_s', 0):.0f} s hold: {heat:+.2f} mΩ/min")
+    print()
+
+
+def print_live(sample: Sample) -> None:
+    print(
+        f"  t={sample.t:6.1f}s  V={sample.voltage:6.3f} V  "
+        f"I={sample.current:6.3f} A  P={sample.power:6.2f} W  state={sample.state}"
+    )
+
+
+def print_verdict(verdict: dict, as_json: bool = False) -> None:
+    print("\n--- VERDICT ---")
+    if as_json:
+        print(json.dumps(verdict, indent=2, default=str))
+    else:
+        print(f"  verdict   : {verdict.get('verdict', '')}")
+        print(f"  grade     : {verdict.get('grade')}")
+        print(f"  confidence: {verdict.get('confidence')}")
+        tags = verdict.get("tags") or []
+        print(f"  tags      : {', '.join(tags) if tags else '-'}")
+        for line in verdict.get("evidence", []):
+            print(f"  evidence  : {line}")
+        for line in verdict.get("limitations", []):
+            print(f"  note      : {line}")
+    print()

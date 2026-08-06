@@ -1,0 +1,10 @@
+# RADWI Cable-Quality Analyzer — Python dependencies
+# Install inside a virtualenv on the Raspberry Pi:
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# RPi.GPIO is NOT installable via pip on the Pi's OS — install it with apt:
+#   sudo apt install -y python3-rpi.gpio     (or python3-lgpio on newer images; see dependencies.md)
+# tomllib (config parsing) is stdlib on Python 3.11+ (Raspberry Pi OS Bookworm ships 3.11).
+
+pi-ina219>=0.2.3

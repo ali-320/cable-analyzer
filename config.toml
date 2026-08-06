@@ -1,0 +1,95 @@
+# RADWI Cable-Quality Analyzer — runtime configuration
+# All thresholds live here so calibration edits never touch code.
+# Copy this file to config.local.toml and edit, or edit in place.
+
+[hardware]
+simulate = false          # true = no hardware needed (synthetic data; useful for tests/demos)
+i2c_bus = 1               # I2C bus on Pi Zero 2 W
+ina219_address = "0x40"   # INA219 default address (A0,A1 -> GND)
+shunt_ohms = 0.1          # INA219 breakout shunt value
+max_expected_amps = 3.0   # INA219 calibration; keep <= 3.0 with a 0.1 ohm shunt
+sample_rate_hz = 25.0     # acquisition rate (realistic 20-50 Hz on Pi Zero 2 W)
+
+[gpio]                    # see WIRING_SCHEMATICS.md §4
+sda = 2
+scl = 3
+pwr_ok = 17               # CH224K PWR_OK (polarity may vary per module)
+sel0 = 22
+sel1 = 23
+sel2 = 24
+en = 25
+q1_phone_switch = 26      # P-MOSFET phone isolation (active-low)
+q2_load_switch = 27       # N-MOSFET controlled-load switch (active-high)
+load_pwm = 18             # e-load setpoint PWM (GPIO18 = PWM0)
+status_led = 5
+phone_present = 6         # optional comparator input
+
+[ch224k]
+pwr_ok_polarity = "high"  # "high" = PWR_OK HIGH means PD contract OK; invert if your module differs
+renegotiate_wait_s = 1.5  # settle delay after changing SEL straps (VBUS dips ~0.3-1 s)
+# SEL strap code for each PDO voltage (SEL2:SEL1:SEL0, SEL0 = LSB)
+# verify against your module's silkscreen / datasheet truth table
+sel_truth = {5 = 0b000, 9 = 0b001, 12 = 0b010, 15 = 0b011, 20 = 0b100}
+verify_tolerance = 0.05   # +/-5% V verification window after negotiation
+
+[load]
+max_probe_amps = 2.5      # software cap (INA219 +/-3.2A with 0.1 ohm shunt; keep margin)
+pwm_freq_hz = 1000
+# e-load setpoint math: V_set = 3.3 * duty * R2/(R1+R2); I = V_set / r_sense
+r_sense_ohm = 0.1
+divider_r1_ohm = 100000
+divider_r2_ohm = 10000
+
+[probe]
+voltages = [5, 9, 12]     # PDO targets; software never probes >5 V while a phone is attached
+current_steps = [0.5, 1.0, 1.5, 2.0]   # e-load steps (A)
+step_hold_s = 5.0
+transient_drop_s = 1.0    # first N seconds of a step are discarded (settling)
+heat_hold_s = 60.0        # longest step held to expose self-heating (dR/dt)
+heat_step_index = -1      # index into current_steps used for the heating hold
+
+[session]
+i_no_load = 0.05          # A ; I below this = "not charging" / "charged"
+i_charge_start = 0.10     # A ; I above this (sustained) = charging started
+debounce_start_s = 5.0
+debounce_end_s = 60.0     # I < i_no_load for this long after charging = phone charged
+charge_timeout_s = 7200   # give up waiting for CHARGED after this
+open_timeout_s = 30.0     # IDLE this long while a phone is expected -> OPEN candidate
+
+[measurement]
+i_min_compute = 0.10      # A ; R features computed only above this
+r_fixture_ohm = 0.0       # filled by scripts/calibrate.py (baseline: fixture + CH224K path)
+length_m = 1.0            # user-provided cable length for per-metre normalization (None = unknown)
+v_target_5v = 5.0
+v_min_compliance_5v = 4.75
+
+[rules]
+# grade limits (mOhm, per 1 m, after baseline subtraction)
+grade_limits_mohm = [150, 250, 300, 500]   # A | B | C | D | F
+sigma_v_excellent_mv = 5.0
+sigma_v_good_mv = 15.0
+sigma_v_marginal_mv = 25.0
+drdt_self_heating_mohm_per_min = 5.0
+interruption_warn_frac = 0.01
+spike_count_warn = 10
+idle_leak_ma = 20.0
+nonlinear_ratio = 0.30
+confidence_floor = 0.0
+
+[sim]                     # simulated-cable scenario (only used with hardware.simulate = true)
+r_cable_ohm = 0.21        # -> ~B/C grade cable
+r_fixture_ohm = 0.05
+heating_k = 0.0004        # R grows ~ I^2 * heating_k * dt (self-heating simulation)
+v_noise = 0.004
+i_noise = 0.008
+# pd_blocked_above = 9   # (optional) set a number like 9 to simulate a cable that
+                           # blocks CC/PD signaling above that voltage -> PD_BLOCKED verdict
+short = false
+open_circuit = false
+intermittent = false
+phone_current_a = 1.2     # simulated phone charge current
+phone_plug_s = 3.0
+phone_taper_s = 60.0      # battery fills -> current tapers -> 0 (= charged)
+
+[paths]
+data_dir = "data"
