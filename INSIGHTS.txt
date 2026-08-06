@@ -1,0 +1,46 @@
+INSIGHTS
+1. Probe means disconnecting the phone, and measuring the charging through a PWM.
+
+2. A=Excellent, B=Good, C=Marginal, D=Poor, F=Failed.
+
+3. When using phone write the command as:
+python -m src.main --length 1.0 --phone-expected
+
+4. The sim_states, are values for simulation.
+
+5. The r_fixture_ohm is the resistance of everything except the cable. The r_cable is calculated as r_cable = r_measured - r_fixture.
+The problem here is that the fixture value can be given by simulation (using the hard coded congif.toml value) and can also be given by using an ideal cable, which is the good approach. (Another approach search for the ideal cable resistance online).
+
+6. The decimal values in sel0 = 22, etc. represent the GPIO22 of Raspberry pi and sel0 is the pin of CH224K. This is the mapping in config.toml.
+
+7. Get the following values:
+- 32 V bus range: selected INA219 measurement range.
+- 3.2 A range: configured current/calibration range.
+- 0.1 Ω shunt: the physical resistor on your INA219 module.
+
+8. “Match” means the software settings must agree with the physical INA219 module.
+Check these values physically:
+- Shunt resistor value on the INA219 board
+Example:  0.1 Ω 
+- INA219 selected shunt FSR/gain
+The code currently uses:
+// python
+RANGE_32V
+GAIN_1_X
+This gives approximately ±320 mV shunt range.
+Then ensure the software matches them:
+// toml
+# config.toml
+shunt_ohms = 0.1
+max_expected_amps = 3.0
+And ensure  ina219_reader.py  uses the same INA219 range/gain.
+The  sampler.py  validation limit should also be compatible with the real maximum current:
+// python
+current > 3.5
+If your physical shunt is different, change  shunt_ohms , INA219 calibration, and the validation limit accordingly.
+
+9. Cable length should be given for per meter measurement and comparison, but without cable length the raw resistance will be used.
+
+10. What if cable length could be measured by multiple attempts between CH224K and the charger.
+
+11. sigma_v_marginal_mv, represents the variation in the voltage.

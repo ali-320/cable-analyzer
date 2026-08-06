@@ -1,0 +1,21 @@
+OUTPUTS
+
+1. FAULT/ABORT
+Grade F
+'It could happen due to the following:
+- Excessive current
+- Out-of-range INA219 voltage
+- Short-circuit-like behavior
+- Invalid electrical readings'
+
+2. - No voltage measured:
+// text
+NO_SOURCE
+
+3. - Voltage present, phone expected, but no current:
+// text
+OPEN
+
+4. - Voltage present but no phone expected or no charging current:
+// text
+NO_CHARGE

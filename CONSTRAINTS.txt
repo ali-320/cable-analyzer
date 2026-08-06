@@ -1,0 +1,8 @@
+CONSTRAINTS
+1. The testing cable must carry the USB-C CC lines correctly. If the cable has a CC/PD signaling fault, the CH224K may be unable to negotiate higher voltages even if VBUS is physically present.
+
+2. The voltage should be between 0 and 26. (INA-219 bus limit)
+
+3. The current should be between -1 to 3.5 (depends on shunt FSR?)
+
+4. When the drdt_self_heating_mohm_per_min = 5.0, it means that the wire is self heating and it send it to at least grade D.

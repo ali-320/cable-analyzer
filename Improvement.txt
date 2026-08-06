@@ -1,0 +1,31 @@
+Improvement:
+
+                  ┌────────────────┐
+USB-C charger ──►│   Testing cable     │──► CH224K USB-C IN (VBUS, CC1, CC2)
+                  └────────────────┘              │
+                                                │  SEL0/1/2 → Pi GPIO 22/23/24
+                                                │  PWR_OK    → Pi GPIO 17
+                                                │  EN        → Pi GPIO 25
+                                                ▼
+                                       CH224K VOUT (VBUS, GND)
+                                                │
+                                                │ (INLINE — current must flow through this)
+                                                ▼
+                                          ┌─────────┐
+                                          │ INA219     │ SDA/SCL → Pi I²C
+                                          │  (shunt)   │
+                                          └────┬────┘
+                                                │
+                                                ▼
+                                          Junction node (post-shunt VBUS / common GND)
+                                            │               │
+                                            │               │
+                                     ┌────▼─────┐ ┌────▼─────┐
+                                     │ Q1 P-MOS    │ │ Q2 N-MOS    │
+                                     │ phone       │ │ load        │  MOSFET gates → Pi
+                                     │ isolation   │ │ switch      │  GPIO 26 / GPIO 27
+                                     └────┬─────┘ └────┬─────┘
+                                            │               │
+                                            ▼               ▼
+                                          Phone       Electronic load
+                                       (USB-C out)   (R_load + PWM GPIO 18)
