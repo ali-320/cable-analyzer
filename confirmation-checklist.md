@@ -2,9 +2,34 @@ Things to understand
 
 - [ ] Give me the all the grades that you are using, the quality decisions in each grade, and the metrics value that send the cable to each grade.
 
-- [ ] Check with the team about the values of the CH224k.
+- [x] Do we still have the charge mode in this the current code. If yes, then what is it's difference from the probe mode, when the mobile charging is in the path.
 
-- [ ] WHat is meant by the controlled load path, and what is PWM.
+> [!INFO] Answer
+> Yes, charge mode still exists.
+>- **Probe mode:** Tests cable quality. It collects many 5 V readings, checks 9 V/12 V compatibility, and calculates the rule-based grade. Higher-voltage unsupported readings are excluded.
+>- **Charge mode:** Monitors the phone continuously at the selected voltage—usually 5 V—to determine whether it is charging, interrupted, disconnected, or fully charged. It does not grade cable quality.
+>
+>To run it on the terminal you will use the following command:
+>`python -m src.main --manual --mode charge --duration 60 --phone-expected`
+>
+>This will run the code for 60 seconds and show the following on the terminal
+>1. Ask you to confirm that the CH224K is manually set to 5 V.
+>2. Display INA219 readings such as voltage and current during charging.
+>3. Monitor the charging state for the specified duration.
+>4. Print a final status, such as:
+// text
+Charging started
+Charging normally
+Charging interrupted
+Phone disconnected
+Phone fully charged
+
+
+- [ ] What is the PWM? Does it exist in raspberry pi zero 2 W? If yes, then does it work as a separate sink for the current which allows current to run at different voltages? What do you mean by the controlled load path?
+
+- [ ] 
+
+- [x] Check with the team about the values of the CH224k.
 
 - [x] What is meant by the Full: probe + charge -> Verdict in the "python -m src.main --length 1.0"
 
@@ -47,3 +72,5 @@ Things to understand
 - [x] What is the final evidence of eta=96.4%
 
 - [x] Why am I specifying the length as 1.0, can't I run it without specifying the length.
+
+

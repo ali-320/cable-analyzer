@@ -34,6 +34,10 @@ class LoadController:
         r1 = float(ld.get("divider_r1_ohm", 100000.0))
         r2 = float(ld.get("divider_r2_ohm", 10000.0))
         self._setpoint_vmax = 3.3 * r2 / (r1 + r2)  # ~0.30 V -> ~3 A
+        self.manual = (
+            str(cfg.get("ch224k", {}).get("control_mode", "gpio")).lower() == "manual"
+            and not self.simulate
+        )
         self._gpio = None
         self._pwm = None
         self.phone_on = False
@@ -42,7 +46,7 @@ class LoadController:
 
         if self.simulate:
             self._sim = SimulatedLoadController(sim_state if sim_state is not None else SimState())
-        else:
+        elif not self.manual:
             self._init_gpio()
 
     def _init_gpio(self) -> None:  # pragma: no cover - requires Pi
@@ -75,6 +79,8 @@ class LoadController:
         self.current = min(max(amps, 0.0), self.max_probe_amps) if enable else 0.0
         if self.simulate:
             self._sim.set_current(self.current, enable)
+        elif self.manual:
+            return  # No controlled-load GPIO is connected in manual-voltage mode.
         else:  # pragma: no cover - Pi
             if self._pwm is not None:
                 self._pwm.ChangeDutyCycle(self.duty_for_current(self.current) if enable else 0.0)
@@ -85,6 +91,8 @@ class LoadController:
         self.phone_on = bool(on)
         if self.simulate:
             self._sim.phone_switch(on)
+        elif self.manual:
+            return  # The phone is directly attached to the Y-junction.
         else:  # pragma: no cover - Pi
             self._gpio.output(self.pins.q1_phone_switch, self._gpio.LOW if on else self._gpio.HIGH)
 

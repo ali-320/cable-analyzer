@@ -142,6 +142,10 @@ def evaluate(
     if pd_blocked:
         tags.append("PD_BLOCKED")
         evidence.append(f"PD negotiation failed at: {pd_blocked} V (cable blocks CC/PD signaling)")
+    manual_mismatch = probe.get("manual_voltage_mismatch") or []
+    if manual_mismatch:
+        tags.append("VOLTAGE_MISMATCH")
+        evidence.append(f"manual voltage did not match INA219 reading at: {manual_mismatch} V")
 
     idle_i = features.get("idle_I")
     if idle_i is not None and idle_i * 1000.0 > leak_ma:

@@ -6,3 +6,7 @@ CONSTRAINTS
 3. The current should be between -1 to 3.5 (depends on shunt FSR?)
 
 4. When the drdt_self_heating_mohm_per_min = 5.0, it means that the wire is self heating and it send it to at least grade D.
+
+5. The current_direction = "reverse" right now in config.toml, because the current flows from the vin negative to vin positive
+   of the INA219. 
+

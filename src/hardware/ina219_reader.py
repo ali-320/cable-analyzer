@@ -27,6 +27,15 @@ class INA219Reader:
         self.max_amps = float(hw.get("max_expected_amps", 3.0))
         self.bus = int(hw.get("i2c_bus", 1))
         self.address = int(str(hw.get("ina219_address", "0x40")), 0)
+        measurement = cfg.get("measurement", {})
+        # INA219 reports positive current from VIN+ to VIN-. The current
+        # hardware description feeds source VBUS to VIN- and the phone from
+        # VIN+, so reverse the sign to obtain positive charging current.
+        direction = str(measurement.get("current_direction", "forward")).lower()
+        self.current_sign = -1.0 if direction in {"reverse", "inverted", "backward"} else 1.0
+        self.bus_voltage_side = str(
+            measurement.get("bus_voltage_side", "load")
+        ).lower()
         self._ina = None
         self._last_error: Optional[str] = None
         self.read_count = 0
@@ -46,8 +55,9 @@ class INA219Reader:
                 "pip install -r requirements.txt"
             ) from exc
         self._ina = INA219(self.shunt_ohms, self.max_amps, address=self.address, busnum=self.bus)
-        # GAIN_1_X => +/-320 mV shunt FSR => +/-3.2 A with a 0.1 ohm shunt
-        self._ina.configure(self._ina.RANGE_32V, self._ina.GAIN_1_X)
+        # GAIN_8_320MV => +/-320 mV shunt FSR => +/-3.2 A with a 0.1 ohm shunt.
+        # The pi-ina219 API exposes GAIN_8_320MV, not GAIN_1_X.
+        self._ina.configure(self._ina.RANGE_32V, self._ina.GAIN_8_320MV)
         self._ina.wake()
 
     @property
@@ -60,9 +70,17 @@ class INA219Reader:
         if self.simulate:
             return self._sim.read(t)
         try:
-            v = float(self._ina.voltage())
-            i = float(self._ina.current()) / 1000.0
-            p = float(self._ina.power()) / 1000.0
+            v_bus = float(self._ina.voltage())
+            i = self.current_sign * float(self._ina.current()) / 1000.0
+            # If the source is connected to VIN- and the phone to VIN+, the
+            # INA219 bus reading is source-side. Subtract the shunt drop to
+            # expose the phone-side voltage used by metrics/rules.
+            v = v_bus
+            if self.bus_voltage_side == "source":
+                v = v_bus - abs(i) * self.shunt_ohms
+            # Use the corrected current direction so power is positive for
+            # power delivered to the phone.
+            p = v * i
             ok = not (math.isnan(v) or math.isnan(i) or v < 0.0)
             if not ok:
                 self.error_count += 1

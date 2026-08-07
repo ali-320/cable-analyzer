@@ -33,26 +33,50 @@ def print_self_check(results: dict) -> None:
     for key, label in (
         ("ina219", "INA219 on I2C"),
         ("voltage", "Bus voltage ~5 V"),
-        ("pwr_ok", "CH224K PWR_OK (PD contract)"),
+        ("pwr_ok", "CH224K PWR_OK (PD contract; manual mode bypasses this)"),
     ):
         passed = bool(results.get(key))
         ok = ok and passed
         print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
     if "v_reading" in results:
         print(f"  V_reading = {results['v_reading']:.3f} V  I = {results['i_reading'] * 1000:.1f} mA")
+    if results.get("pwr_ok_note"):
+        print(f"  note: {results['pwr_ok_note']}")
     if "note" in results:
         print(f"  note: {results['note']}")
     print(f"  RESULT: {'ALL PASS - ready for calibrate.py' if ok else 'FIX BEFORE CONTINUING'}\n")
 
 
 def print_probe(probe: dict) -> None:
-    print("\n--- PROBE (multi-voltage cable characterization) ---")
+    heading = "manual-voltage readings" if probe.get("manual_voltage_mode") else "multi-voltage cable characterization"
+    print(f"\n--- PROBE ({heading}) ---")
+    if probe.get("measurement_note"):
+        print(f"  NOTE: {probe['measurement_note']}")
     for step in probe.get("steps", []):
         print(
             f"  V_target={step['v_target']:>5.1f} V  I={step['i']:>4.2f} A  "
             f"V_load={step['v_load']:.3f} V  R_loop={step['r_loop_mohm']:>7.1f} mΩ  "
             f"R_cable={step['r_cable_mohm']:>7.1f} mΩ"
         )
+    for reading in probe.get("manual_readings", []):
+        print(
+            f"  manual V_target={reading['v_target']:>5.1f} V  "
+            f"V_mean={reading['v_mean'] if reading['v_mean'] is not None else 'n/a'} V  "
+            f"I_mean={reading['i_mean'] if reading['i_mean'] is not None else 'n/a'} A  "
+            f"valid={reading['n_valid']}"
+        )
+    unsupported = probe.get("unsupported_voltages") or []
+    if unsupported:
+        print(f"  compatibility: phone drew no current at {unsupported} V; excluded from quality grade")
+    for recovery in probe.get("recovery_checks", []):
+        print(
+            f"  recovery at 5 V after {recovery['after_voltage']} V: "
+            f"I_mean={recovery['i_mean']} A  "
+            f"charging_resumed={recovery['charging_resumed']}"
+        )
+    mismatch = probe.get("manual_voltage_mismatch") or []
+    if mismatch:
+        print(f"  !! measured voltage did not match requested voltage at: {mismatch} V")
     blocked = probe.get("pd_blocked") or []
     if blocked:
         print(f"  !! PD negotiation FAILED at: {blocked} V  (cable blocks CC/PD signaling)")

@@ -44,3 +44,13 @@ If your physical shunt is different, change  shunt_ohms , INA219 calibration, an
 10. What if cable length could be measured by multiple attempts between CH224K and the charger.
 
 11. sigma_v_marginal_mv, represents the variation in the voltage.
+
+---
+
+12. Currently we select the voltage readings mannually.
+
+13. It will detect that the phone supports a certain voltage or not.
+
+14. Whether the phone is disconnected or not.
+
+15. Run the probe mode for mathematical calculation and the charge mode with length, manual setting, and duration (optional and only for charging mode.)

@@ -8,14 +8,21 @@ Run from the cable-analyzer/ folder (Python 3.11+):
     python -m src.main --demo                  # no hardware: simulated good-ish cable
     python -m src.main --simulate --mode probe # probe only, simulated
 
-Modes: auto (probe + charge), probe, charge. The phone interlock is
-enforced: probe voltages above 5 V are refused while the phone path (Q1)
-is enabled. 
+Modes: auto (probe + charge), probe, charge. With ``--manual``, the
+operator changes CH224K SEL straps by hand and confirms the measured voltage
+at each step; no CH224K GPIO/PWR_OK pins are used.
+
+The manual setup now places the INA219 inline between CH224K VBUS and the
+phone. Manual mode uses the 5 V phone-charging readings for quality analysis;
+9 V and 12 V are compatibility checks only. If a higher-voltage step has no
+current, it is excluded from quality metrics and the operator is asked to
+return to 5 V to verify that charging resumes.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 import tomllib
@@ -39,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="RADWI cable-quality analyzer (rules)")
     ap.add_argument("--config", default="config.toml")
     ap.add_argument("--simulate", action="store_true", help="use synthetic hardware")
+    ap.add_argument("--manual", action="store_true", help="manual CH224K SEL changes; no CH224K GPIO required")
     ap.add_argument("--mode", choices=["auto", "probe", "charge"], default="auto")
     ap.add_argument("--self-check", action="store_true", help="hardware sanity check only")
     ap.add_argument("--duration", type=float, default=None, help="charge-mode timeout (s)")
@@ -49,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-def load_config(path: str, simulate: bool, demo: bool) -> dict:
+def load_config(path: str, simulate: bool, demo: bool, manual: bool = False) -> dict:
     with open(path, "rb") as fh:
         cfg = tomllib.load(fh)
     if simulate or demo:
@@ -58,6 +66,10 @@ def load_config(path: str, simulate: bool, demo: bool) -> dict:
         # R_cable = R_loop - R_fixture subtraction consistent in demo mode
         sim_fixture = float(cfg.get("sim", {}).get("r_fixture_ohm", 0.05))
         cfg["measurement"]["r_fixture_ohm"] = sim_fixture
+    if not isinstance(cfg.get("ch224k"), dict):
+        cfg["ch224k"] = {}
+    if manual:
+        cfg["ch224k"]["control_mode"] = "manual"
     return cfg
 
 
@@ -84,7 +96,8 @@ def build_hardware(cfg: dict, simulate: bool):
 
 
 def run_self_check(cfg: dict, reader: INA219Reader, ch224k: CH224KController) -> dict:
-    results: dict = {"ina219": False, "voltage": False, "pwr_ok": False}
+    manual = bool(getattr(ch224k, "manual", False))
+    results: dict = {"ina219": False, "voltage": False, "pwr_ok": manual, "manual_mode": manual}
     if not reader.ok and not reader.simulate:
         results["note"] = "INA219 not found on I2C - check wiring (i2cdetect -y 1 should show 0x40)"
         return results
@@ -94,18 +107,62 @@ def run_self_check(cfg: dict, reader: INA219Reader, ch224k: CH224KController) ->
     results["i_reading"] = i
     v_target = float(cfg.get("measurement", {}).get("v_target_5v", 5.0))
     results["voltage"] = ok and abs(v - v_target) <= 0.25 * v_target
-    results["pwr_ok"] = bool(ch224k.read_pwr_ok())
+    pwr_ok = ch224k.read_pwr_ok()
+    if pwr_ok is not None:
+        results["pwr_ok"] = bool(pwr_ok)
+    else:
+        results["pwr_ok"] = True  # manual mode deliberately has no PWR_OK wire
+        results["pwr_ok_note"] = "manual mode: CH224K PWR_OK is not wired; voltage is verified from INA219/DMM"
     if not results["voltage"]:
         results["note"] = f"expected ~{v_target} V but read {v:.2f} V - check charger/cable/CH224K"
     return results
 
 
+def _manual_voltage_confirmation(target_v: float) -> None:
+    """Require an explicit terminal confirmation before a manual voltage step."""
+    if target_v > 5.0:
+        print(
+            "  WARNING: SEL GPIO control and phone isolation are unavailable. "
+            "The phone is directly connected; verify that it supports this "
+            "voltage before continuing."
+        )
+    prompt = (
+        f"  Set CH224K SEL0/SEL1/SEL2 manually for {target_v:g} V, verify VBUS "
+        "with a DMM, then type the target voltage to continue: "
+    )
+    try:
+        confirmation = float(input(prompt).strip())
+    except EOFError as exc:
+        raise RuntimeError("manual voltage mode needs an interactive terminal") from exc
+    except ValueError as exc:
+        raise RuntimeError(f"manual voltage {target_v:g} V was not confirmed; stopped safely") from exc
+    if abs(confirmation - target_v) > max(0.05, target_v * 0.01):
+        raise RuntimeError(f"manual voltage {target_v:g} V was not confirmed; stopped safely")
+
+
 def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
-    """DEVELOPMENT_PLAN.md §4.2 — phone isolated (Q1 off), multi-voltage steps."""
+    """DEVELOPMENT_PLAN.md §4.2 — automatic or manually confirmed voltage steps."""
     pr = cfg.get("probe", {})
-    voltages = [int(v) for v in pr.get("voltages", [5, 9, 12])]
+    manual = bool(getattr(ch224k, "manual", False))
+    configured_voltages = [int(v) for v in pr.get("voltages", [5, 9, 12])]
+    if manual:
+        # Manual phone testing always starts at 5 V, then checks higher PDOs.
+        voltages = [v for v in (5, 9, 12) if v in configured_voltages]
+        if 5 not in voltages:
+            voltages.insert(0, 5)
+    else:
+        voltages = configured_voltages
     steps = [float(s) for s in pr.get("current_steps", [0.5, 1.0, 1.5, 2.0])]
     hold = float(pr.get("step_hold_s", 5.0))
+    ch = cfg.get("ch224k", {})
+    verify_tol = float(ch.get("verify_tolerance", 0.05))  # relative, GPIO mode
+    # Manual mode: the phone is the load, so the rail is pulled below the
+    # requested PDO (e.g. 9 V -> ~8.4 V on a lossy cable). A tight relative
+    # tolerance would wrongly call this a failed negotiation. Instead accept
+    # any rail within a few volts of the target as long as it clearly stepped
+    # up from the previous rail.
+    manual_verify_tol_v = float(ch.get("manual_verify_tolerance_v", 1.0))
+    manual_verify_min_step_v = float(ch.get("manual_verify_min_step_v", 0.5))
     drop = float(pr.get("transient_drop_s", 1.0))
     heat_hold = float(pr.get("heat_hold_s", 60.0))
     heat_idx = int(pr.get("heat_step_index", -1))
@@ -114,19 +171,124 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
     r_fixture = float(meas.get("r_fixture_ohm", 0.0))
     simulate = cfg["hardware"].get("simulate", False)
 
-    load.phone_switch(False)  # interlock: phone isolated during probing
-    results: dict = {"steps": [], "pd_blocked": [], "r_fixture": r_fixture, "heat_hold_s": heat_hold}
+    load.phone_switch(False)  # GPIO interlock in legacy wiring; no-op in manual mode
+    results: dict = {
+        "steps": [], "pd_blocked": [], "manual_voltage_mode": manual,
+        "r_fixture": r_fixture, "heat_hold_s": heat_hold,
+    }
+    if manual:
+        results["measurement_note"] = (
+            "INA219 is inline with the phone. 5 V readings are used for quality; "
+            "9 V/12 V readings are compatibility checks only."
+        )
+        results["unsupported_voltages"] = []
+        results["recovery_checks"] = []
+
+    quality_samples: list[Sample] = []
+    # Raw samples from every manual voltage and recovery period. These are
+    # exported to the session CSV; the compact probe summary remains JSON-safe.
+    session_samples: list[Sample] = []
+
+    last_verified_v = 5.0
+
+    def rail_verified(v_check: float, v_target: float, ok: bool) -> bool:
+        """True when the negotiated rail is usable for the current wiring.
+
+        GPIO mode keeps the strict relative tolerance. Manual mode accepts
+        a rail pulled down by the phone's load (within ``manual_verify_tolerance_v``
+        of the target) as long as it also stepped up from the previous rail by
+        ``manual_verify_min_step_v`` — this detects the 5 -> 9 -> 12 V step
+        even when cable loss leaves VBUS below the requested PDO.
+        """
+        if not ok or math.isnan(v_check) or v_check < 1.0:
+            return False
+        if not manual or v_target <= 5.0:
+            # 5 V is the quality dataset; keep the strict relative check so a
+            # broken fixture/charging rail is caught, not silently graded.
+            return abs(v_check - v_target) <= verify_tol * v_target
+        within_target = abs(v_check - v_target) <= manual_verify_tol_v
+        stepped_up = v_check >= last_verified_v + manual_verify_min_step_v
+        return within_target and stepped_up
+
+    def recover_to_5(after_voltage: int, hold_seconds: float) -> bool:
+        """Return to 5 V after an unsupported/mismatched higher voltage."""
+        _manual_voltage_confirmation(5.0)
+        ch224k.set_voltage(5.0)
+        recovery = Sampler(reader, rate, simulate).run(hold_seconds, state="PROBE")
+        session_samples.extend(recovery)
+        recovery_valid = [s for s in recovery if s.valid]
+        recovery_i = (
+            sum(s.current for s in recovery_valid) / len(recovery_valid)
+            if recovery_valid else 0.0
+        )
+        resumed = recovery_i >= float(cfg.get("session", {}).get("i_charge_start", 0.10))
+        results["recovery_checks"].append({
+            "after_voltage": after_voltage,
+            "v_mean": round(
+                sum(s.voltage for s in recovery_valid) / len(recovery_valid), 3
+            ) if recovery_valid else None,
+            "i_mean": round(recovery_i, 4),
+            "charging_resumed": resumed,
+            "n_valid": len(recovery_valid),
+        })
+        if resumed:
+            quality_samples.extend(recovery)
+        else:
+            print("  WARNING: charging did not resume at 5 V.")
+        return resumed
 
     for v in voltages:
-        if v != 5 and load.phone_on:
+        if manual:
+            _manual_voltage_confirmation(float(v))
+        elif v != 5 and load.phone_on:
             raise RuntimeError("phone interlock: cannot probe >5 V while phone connected")
         if not ch224k.set_voltage(float(v)):
             results["pd_blocked"].append(v)
             continue
-        # verify the negotiated rail arrived
+        # verify the negotiated rail arrived (tolerant in manual mode: the
+        # phone's load pulls VBUS below the requested PDO on a lossy cable)
         v_check, _, _, ok = reader.read_sample(time.monotonic())
-        if not ok or abs(v_check - v) > float(cfg.get("ch224k", {}).get("verify_tolerance", 0.05)) * v:
-            results["pd_blocked"].append(v)
+        if not rail_verified(v_check, float(v), ok):
+            (results.setdefault("manual_voltage_mismatch", []) if manual else results["pd_blocked"]).append(v)
+            if manual and v > 5:
+                print(f"  Voltage did not reach the requested {v:g} V; checking recovery at 5 V.")
+                recover_to_5(v, float(pr.get("recovery_hold_s", pr.get("manual_hold_s", hold))))
+            continue
+        last_verified_v = float(v)
+        if manual:
+            # The phone is the load in this wiring. Keep 5 V as the quality
+            # dataset; higher-voltage readings are never mixed into grading.
+            manual_hold = float(
+                pr.get("manual_5v_hold_s" if v == 5 else "manual_hold_s", hold)
+            )
+            samples = Sampler(reader, rate, simulate).run(manual_hold, state="PROBE")
+            session_samples.extend(samples)
+            valid = [s for s in samples if s.valid]
+            i_mean = (sum(s.current for s in valid) / len(valid)) if valid else 0.0
+            v_mean = (sum(s.voltage for s in valid) / len(valid)) if valid else None
+            current_present = i_mean >= float(cfg.get("session", {}).get("i_charge_start", 0.10))
+            reading = {
+                "v_target": v,
+                "v_mean": round(v_mean, 3) if v_mean is not None else None,
+                "i_mean": round(i_mean, 4),
+                "charging_detected": current_present,
+                "n_valid": len(valid),
+                "quality_dataset": v == 5,
+            }
+            results.setdefault("manual_readings", []).append(reading)
+
+            if v == 5:
+                quality_samples.extend(samples)
+            elif not current_present:
+                # A phone may reject 9/12 V even though the cable and phone are
+                # connected. Record that compatibility result, then return to
+                # 5 V and verify that charging resumes before continuing.
+                results["unsupported_voltages"].append(v)
+                print(
+                    f"  No charging current detected at {v:g} V. This phone may not "
+                    "support that voltage; the step will not affect cable grading."
+                )
+                recover_to_5(v, float(pr.get("recovery_hold_s", manual_hold)))
             continue
         for idx, target_i in enumerate(steps):
             if target_i > float(cfg.get("load", {}).get("max_probe_amps", 2.5)):
@@ -167,11 +329,27 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
 
     # always end the probe back at the safe 5 V default
     try:
+        if manual:
+            _manual_voltage_confirmation(5.0)
         ch224k.set_voltage(5.0)
     except ValueError:
         pass
     load.set_current(0.0, enable=False)
     load.phone_switch(True)  # re-enable phone path after probing
+    if manual and quality_samples:
+        quality = compute_features(
+            quality_samples,
+            v_target=5.0,
+            r_fixture=r_fixture,
+            length_m=meas.get("length_m"),
+            i_min=float(meas.get("i_min_compute", 0.10)),
+            i_no_load=float(cfg.get("session", {}).get("i_no_load", 0.05)),
+        )
+        results["quality_features"] = quality
+    if manual:
+        # Keep raw manual-probe readings separate from the JSON summary. The
+        # caller exports these through the same CSV path used by charge mode.
+        results["_samples"] = session_samples
     return results
 
 
@@ -186,6 +364,9 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
     length = meas.get("length_m")
     sim_cfg = cfg.get("sim", {})
 
+    if getattr(ch224k, "manual", False):
+        _manual_voltage_confirmation(5.0)
+        ch224k.set_voltage(5.0)
     load.phone_switch(True)
     tracker = SessionTracker(cfg, v_target=v_target, phone_expected=phone_expected)
     samples: list[Sample] = []
@@ -241,7 +422,7 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
 def main() -> int:
     args = parse_args()
     cli.force_utf8_stdout()
-    cfg = load_config(args.config, simulate=args.simulate, demo=args.demo)
+    cfg = load_config(args.config, simulate=args.simulate, demo=args.demo, manual=args.manual)
     simulate = cfg["hardware"].get("simulate", False)
 
     cli.print_banner()
@@ -255,6 +436,17 @@ def main() -> int:
             print(f"  using calibration: R_fixture = {cal['r_fixture_mean_mohm']:.1f} mΩ ({cal_path.name})")
 
     reader, ch224k, load, sim_state = build_hardware(cfg, simulate)
+
+    if getattr(ch224k, "manual", False) and args.mode == "auto" and not args.self_check:
+        print(
+            "Manual voltage mode cannot run auto (probe + charge): the current "
+            "Y-junction has no phone-isolation switch. Use --mode probe, or "
+            "restore the protected GPIO wiring for auto mode."
+        )
+        ch224k.close()
+        load.close()
+        reader.shutdown()
+        return 2
 
     if args.demo:
         cfg["session"]["debounce_start_s"] = min(float(cfg["session"]["debounce_start_s"]), 3.0)
@@ -275,12 +467,16 @@ def main() -> int:
         sid = storage.new_session(meta)
 
         probe: dict = {}
+        probe_samples: list[Sample] = []
         if args.mode in ("auto", "probe"):
             probe = run_probe(cfg, reader, ch224k, load, sim_state)
+            # Raw probe samples are exported to CSV, but must not be embedded
+            # in probe_json (which is the compact session summary).
+            probe_samples = probe.pop("_samples", [])
             storage.save_probe(sid, probe)
             cli.print_probe(probe)
 
-        features, meta, samples, tracker = (None, meta, [], None)
+        features, meta, samples, tracker = (None, meta, probe_samples, None)
         duration = args.duration or float(cfg["session"].get("charge_timeout_s", 7200))
         if args.mode in ("auto", "charge"):
             features, meta, samples, tracker = run_charge(
@@ -291,8 +487,17 @@ def main() -> int:
             meta.probe = probe
 
         if args.mode == "probe":
-            # grade from the probe's highest-current step instead of a charge session
-            if probe.get("steps"):
+            # A manual session can still prove that voltage is present even if
+            # the INA219 branch has no current. Do not mislabel that as NO_SOURCE.
+            if probe.get("manual_readings"):
+                meta.v_present = True
+            # In manual inline-phone mode, grade only from the collected 5 V
+            # charging dataset. 9/12 V compatibility checks are excluded.
+            if probe.get("quality_features"):
+                features = probe["quality_features"]
+                meta.v_present = True
+            # Legacy probe mode grades from the highest-current load step.
+            elif probe.get("steps"):
                 best = probe["steps"][-1]
                 r_ohm = best["r_cable_mohm"] / 1000.0
                 features = {
@@ -300,7 +505,7 @@ def main() -> int:
                     "r_std": r_ohm * 0.05, "r_max": r_ohm,
                     "r_p95": r_ohm, "r_p5": r_ohm,  # single-step probe: no spread
                     "r_dvdi": None, "dV_dI_slope": 0.0, "sigma_V": 0.0,
-                    "V_min": best["v_load"], "eta": best["v_load"] / 5.0,
+                    "V_min": best["v_load"], "eta": best["v_load"] / max(best["v_target"], 1e-6),
                     "mean_I": best["i"], "max_I": best["i"], "mean_P_loss": 0.0,
                     "E_wh": 0.0, "dR_dt_mOhm_per_min": probe.get("dR_dt_mOhm_per_min", 0.0),
                     "interruption_frac": 0.0, "spike_count": 0, "idle_I": None,
@@ -309,8 +514,8 @@ def main() -> int:
                     "length_m": cfg["measurement"].get("length_m"),
                 }
                 meta.v_present = True
-            elif probe.get("pd_blocked"):
-                # power was present but PD negotiation failed -> surface PD_BLOCKED
+            elif probe.get("pd_blocked") or probe.get("manual_voltage_mismatch"):
+                # power was present but negotiation/measurement verification failed
                 meta.v_present = True
 
         verdict_meta = {
@@ -321,6 +526,7 @@ def main() -> int:
             "phone_expected": meta.phone_expected,
             "fault_reason": meta.fault_reason,
             "probe": probe,
+            "manual_voltage_mode": bool(probe.get("manual_voltage_mode", False)),
             "length_m": meta.length_m,
         }
         verdict = rule_verdict(features, verdict_meta, cfg)

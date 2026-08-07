@@ -32,12 +32,16 @@ class CH224KController:
         self.verify_tol = float(ch.get("verify_tolerance", 0.05))
         self._truth = {int(float(k)): int(v) for k, v in ch.get("sel_truth", {}).items()}
         self._pwr_ok_active_high = str(ch.get("pwr_ok_polarity", "high")).lower() != "low"
+        # Temporary Y-junction wiring has no SEL/PWR_OK/EN GPIO connections.
+        # In this mode the operator changes SEL straps by hand and confirms
+        # the measured rail at the terminal.
+        self.manual = (str(ch.get("control_mode", "gpio")).lower() == "manual") and not self.simulate
         self._gpio = None
         self.voltage = None
 
         if self.simulate:
             self._sim = SimulatedCH224K(sim_state if sim_state is not None else SimState())
-        else:
+        elif not self.manual:
             self._init_gpio()
 
     def _init_gpio(self) -> None:  # pragma: no cover - requires Pi
@@ -71,6 +75,11 @@ class CH224KController:
             self.voltage = self._sim.voltage
             time.sleep(0.01)  # keep timing behavior comparable
             return ok
+        if self.manual:
+            # The operator confirmation is handled by main.py, where the
+            # measured INA219 voltage can also be checked and recorded.
+            self.voltage = float(target_v)
+            return True
         # real hardware: write strap bits (SEL0 = LSB)
         self._gpio.output(self.pins.sel0, self._gpio.HIGH if code & 1 else self._gpio.LOW)
         self._gpio.output(self.pins.sel1, self._gpio.HIGH if code & 2 else self._gpio.LOW)
@@ -79,15 +88,19 @@ class CH224KController:
         self.voltage = float(target_v)
         return True
 
-    def read_pwr_ok(self) -> bool:
+    def read_pwr_ok(self) -> bool | None:
         if self.simulate:
             return self._sim.read_pwr_ok()
+        if self.manual:
+            return None  # PWR_OK is not wired in the temporary setup.
         value = self._gpio.input(self.pins.pwr_ok)  # pragma: no cover - Pi
         return bool(value) if self._pwr_ok_active_high else not bool(value)
 
     def enable(self, on: bool) -> None:
         if self.simulate:
             self._sim.enable(on)
+        elif self.manual:
+            return  # EN is not wired in the temporary setup.
         else:  # pragma: no cover - Pi
             self._gpio.output(self.pins.en, self._gpio.HIGH if on else self._gpio.LOW)
 

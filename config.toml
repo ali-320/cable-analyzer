@@ -25,12 +25,20 @@ status_led = 5
 phone_present = 6         # optional comparator input
 
 [ch224k]
+# gpio = legacy protected wiring; manual = temporary Y-junction wiring
+# (SEL0/1/2, EN and PWR_OK are not connected to the Pi).
+control_mode = "manual"
 pwr_ok_polarity = "high"  # "high" = PWR_OK HIGH means PD contract OK; invert if your module differs
 renegotiate_wait_s = 1.5  # settle delay after changing SEL straps (VBUS dips ~0.3-1 s)
 # SEL strap code for each PDO voltage (SEL2:SEL1:SEL0, SEL0 = LSB)
 # verify against your module's silkscreen / datasheet truth table
 sel_truth = {5 = 0b000, 9 = 0b001, 12 = 0b010, 15 = 0b011, 20 = 0b100}
-verify_tolerance = 0.05   # +/-5% V verification window after negotiation
+verify_tolerance = 0.05   # GPIO mode: +/-5% V verification window after negotiation
+# Manual mode: the phone is the load, so a lossy cable pulls the rail below
+# the requested PDO (e.g. 9 V -> ~8.4 V). Verify that the rail stepped up from
+# the previous voltage instead of demanding a tight relative match.
+manual_verify_tolerance_v = 1.0   # accept a rail within +/-1 V of the target
+manual_verify_min_step_v = 0.5    # ...and at least 0.5 V above the previous rail
 
 [load]
 max_probe_amps = 2.5      # software cap (INA219 +/-3.2A with 0.1 ohm shunt; keep margin)
@@ -41,12 +49,15 @@ divider_r1_ohm = 100000
 divider_r2_ohm = 10000
 
 [probe]
-voltages = [5, 9, 12]     # PDO targets; software never probes >5 V while a phone is attached
+voltages = [5, 9, 12]     # manual order: 5 V quality, then 9/12 V compatibility checks
 current_steps = [0.5, 1.0, 1.5, 2.0]   # e-load steps (A)
 step_hold_s = 5.0
 transient_drop_s = 1.0    # first N seconds of a step are discarded (settling)
 heat_hold_s = 60.0        # longest step held to expose self-heating (dR/dt)
 heat_step_index = -1      # index into current_steps used for the heating hold
+manual_hold_s = 5.0        # observation time per manual 9/12 V compatibility check
+manual_5v_hold_s = 60.0    # many readings used for 5 V quality analysis
+recovery_hold_s = 20.0      # 5 V readings after an unsupported higher-voltage step
 
 [session]
 i_no_load = 0.05          # A ; I below this = "not charging" / "charged"
@@ -62,6 +73,10 @@ r_fixture_ohm = 0.0       # filled by scripts/calibrate.py (baseline: fixture + 
 length_m = 1.0            # user-provided cable length for per-metre normalization (None = unknown)
 v_target_5v = 5.0
 v_min_compliance_5v = 4.75
+# source VBUS -> INA219 VIN- -> VIN+ -> phone gives a negative raw INA219 current
+current_direction = "reverse"
+# With source VBUS on VIN- and phone on VIN+, INA219 voltage() is source-side.
+bus_voltage_side = "source"
 
 [rules]
 # grade limits (mOhm, per 1 m, after baseline subtraction)
