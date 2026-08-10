@@ -92,7 +92,8 @@ nonlinear_ratio = 0.30
 confidence_floor = 0.0
 
 [sim]                     # simulated-cable scenario (only used with hardware.simulate = true)
-r_cable_ohm = 0.21        # -> ~B/C grade cable
+r_cable_ohm = 0.21        # -> ~B/C grade cable for normal demos
+calibration_reference_cable_ohm = 0.02  # short reference cable used only by calibrate --simulate
 r_fixture_ohm = 0.05
 heating_k = 0.0004        # R grows ~ I^2 * heating_k * dt (self-heating simulation)
 v_noise = 0.004

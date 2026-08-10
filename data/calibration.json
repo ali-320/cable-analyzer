@@ -1,0 +1,22 @@
+{
+  "date": "2026-08-07T10:23:38.207000+00:00",
+  "method": "known-good reference cable with passive phone load at 5 V",
+  "steps": [
+    {
+      "mode": "manual_phone_load",
+      "i_mean_a": 1.2001,
+      "v_mean_v": 4.916,
+      "r_loop_mohm": 70.0,
+      "n": 1500,
+      "i_min_a": 1.1748,
+      "i_max_a": 1.2253
+    }
+  ],
+  "r_fixture_mean_mohm": 70.0,
+  "note": "Differential baseline: includes the known-good reference cable, connectors, wiring, INA219 path, and CH224K path. The phone supplied an uncontrolled natural charging current; no e-load current steps were used.",
+  "reference_cable": "short known-good cable",
+  "reference_current_a": 1.2001,
+  "reference_current_min_a": 1.1748,
+  "reference_current_max_a": 1.2253,
+  "reference_voltage_v": 4.916
+}

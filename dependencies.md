@@ -74,12 +74,19 @@ Run in this exact order (each step must pass before the next):
 | 2 | Set `control_mode = "gpio"`, then run `python -m src.main --length 1.0` | Legacy protected wiring only: automatic probe → 5 V charge → verdict |
 | 3 (tests) | `python -m unittest discover -s tests -v` | Unit tests — run any time, on any machine |
 
-`src/main.py` is the entry point for the product flow. For the current manual
-phone-inline setup, do not run `scripts/calibrate.py` unless a controlled load
-is temporarily placed inline. A phone does not provide the known current steps
-needed for fixture calibration. Run that script after restoring the protected
-inline wiring with a controlled load; its output `data/calibration.json` is
-then auto-loaded by `main.py`.
+`src/main.py` is the entry point for the product flow. The calibration script
+now supports both architectures:
+
+- With `[ch224k] control_mode = "manual"` (the current phone-inline setup),
+  `scripts/calibrate.py` passively observes the phone charging through a short,
+  known-good reference cable at 5 V. It does not claim to control e-load
+  current steps.
+- With `[ch224k] control_mode = "gpio"` (protected wiring), the script uses the
+  controlled e-load steps as before.
+
+In either mode, the output `data/calibration.json` is auto-loaded by
+`main.py`. For manual calibration, the phone must be actively charging; a full
+battery or disconnected phone cannot produce a resistance baseline.
 
 ---
 
@@ -97,25 +104,52 @@ then auto-loaded by `main.py`.
 A `[FAIL]` line tells you which subsystem to fix (check the `note:` text).
 Exit code is 0 only if all three pass — use it in scripts.
 
-### Step 1 — calibrate (`python -m scripts.calibrate`) — legacy wiring only
-Run with a **short, known-good reference cable** fitted. This requires the
-controlled load and INA219 to be inline; it is not valid for the temporary
-phone Y-junction because the phone current bypasses the shunt.
-```
-=== FIXTURE CALIBRATION (use a SHORT known-good reference cable) ===
-  I=0.50 A   R_loop(fixture) =   259.8 mΩ   V_load=4.858 V
-  I=1.00 A   R_loop(fixture) =   260.1 mΩ   V_load=4.728 V
-  I=1.50 A   R_loop(fixture) =   260.1 mΩ   V_load=4.600 V
-  I=2.00 A   R_loop(fixture) =   260.2 mΩ   V_load=4.469 V
+### Step 1 — calibrate (`python -m scripts.calibrate`)
 
-  R_fixture mean = 260.1 mΩ  ->  saved to data/calibration.json
-  main.py picks this up automatically (R_cable = R_loop - R_fixture).
+#### Current manual phone-inline wiring
+Use a **short, known-good reference cable** and connect a phone that is
+actively charging. Set the CH224K manually to 5 V, then run:
+
+```bash
+python -m scripts.calibrate
 ```
-On real hardware with a short reference cable `R_fixture` is typically
-50–150 mΩ (fixture traces + connectors + CH224K path). The sim example above
-shows ~260 mΩ because the simulator models a single "cable" — in real use the
-reference cable contributes almost nothing and the value is the fixture only.
-Cross-check `V_load` against your DMM at each current.
+
+The terminal asks you to confirm 5 V. The script samples the phone's natural
+charging current and saves the measured reference loop resistance as
+`data/calibration.json`. This is a differential baseline containing the
+reference cable plus the fixture/CH224K/INA219 path. Later tests must use the
+same wiring and comparable charging conditions. It is not a controlled-current
+calibration and it cannot be trusted if the phone draws less than
+`measurement.i_min_compute`.
+
+#### Protected GPIO wiring
+With the controlled load and INA219 inline, and `[ch224k] control_mode =
+"gpio"`, the same command uses the configured 0.5/1.0/1.5/2.0 A e-load steps.
+For the current manual path, the output looks like this:
+
+```text
+=== REFERENCE CALIBRATION (use a SHORT known-good reference cable) ===
+  passive phone load: I_mean=1.200 A   R_loop(reference baseline)=100.0 mΩ   V_mean=4.880 V   n=...
+
+  R_fixture/reference baseline = 100.0 mΩ  ->  saved to data/calibration.json
+  main.py will subtract this baseline from later cable measurements automatically.
+```
+
+For the protected GPIO path, the output instead looks like:
+
+```text
+=== REFERENCE CALIBRATION (use a SHORT known-good reference cable) ===
+  I=0.50 A   R_loop(reference) =   259.8 mΩ   V_load=4.858 V
+  I=1.00 A   R_loop(reference) =   260.1 mΩ   V_load=4.728 V
+  I=1.50 A   R_loop(reference) =   260.1 mΩ   V_load=4.600 V
+  I=2.00 A   R_loop(reference) =   260.2 mΩ   V_load=4.469 V
+
+  R_fixture/reference baseline = 260.1 mΩ  ->  saved to data/calibration.json
+  main.py will subtract this baseline from later cable measurements automatically.
+```
+Cross-check `V_load` against your DMM. Do not compare a passive phone-load
+baseline to a later test made with a controlled e-load; use the same architecture
+for calibration and measurement.
 
 ### Step 2 — full test (legacy protected wiring)
 `python -m src.main --length 1.0` is only for the wiring with INA219 inline,
@@ -201,7 +235,8 @@ OK
 | `python -m src.main --simulate --mode charge` | Charge monitoring only, synthetic phone |
 | `python -m src.main --json` | Print the verdict as JSON |
 | `python -m src.main --phone-expected` | Treat a present-but-not-charging phone as an OPEN cable after `open_timeout_s` |
-| `python -m scripts.calibrate --simulate` | Test the calibration script without hardware |
+| `python -m scripts.calibrate --simulate` | Test the current manual passive calibration path with a synthetic short reference cable and phone current |
+| `python -m scripts.calibrate` | Calibrate the active architecture: passive phone load in manual mode, controlled e-load in GPIO mode |
 
 ---
 
