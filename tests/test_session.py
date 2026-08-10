@@ -12,6 +12,7 @@ CFG = {
         "i_charge_start": 0.10,
         "debounce_start_s": 5.0,
         "debounce_end_s": 60.0,
+        "debounce_finish_s": 10.0,
         "open_timeout_s": 30.0,
     }
 }
@@ -55,6 +56,31 @@ class TestStateMachine(unittest.TestCase):
         feed(tr, samples)
         self.assertEqual(tr.state, CHARGED)
         self.assertTrue(tr.ever_charged)
+
+    def test_charged_samples_are_stamped_after_transition(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        charging = [
+            Sample(t=k * 0.5, voltage=4.8, current=1.0, power=4.8)
+            for k in range(21)
+        ]
+        low_start = charging[-1].t + 0.5
+        low = [
+            Sample(t=low_start + k * 0.5, voltage=5.0, current=0.01, power=0.05)
+            for k in range(122)
+        ]
+        post = [
+            Sample(t=low[-1].t + (k + 1) * 0.5, voltage=5.0, current=0.01, power=0.05)
+            for k in range(20)
+        ]
+
+        for sample in charging + low + post:
+            tr.update(sample)
+
+        self.assertEqual(tr.state, CHARGED)
+        self.assertIsNotNone(tr.ended_at)
+        transition_index = next(i for i, s in enumerate(charging + low + post) if s.state == CHARGED)
+        self.assertEqual((charging + low + post)[transition_index].state, CHARGED)
+        self.assertTrue(all(s.state == CHARGED for s in (charging + low + post)[transition_index:]))
 
     def test_open_candidate_when_phone_expected(self):
         tr = SessionTracker(CFG, v_target=5.0, phone_expected=True)

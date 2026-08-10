@@ -372,11 +372,15 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
     samples: list[Sample] = []
 
     def on_sample(s: Sample) -> bool:
-        state, event = tracker.update(s)
-        if event == "charged":
-            return False
+        state, _event = tracker.update(s)
         if state == "FAULT":
             return False
+        if state == "CHARGED":
+            # The transition sample is already stamped CHARGED by the tracker.
+            # Continue collecting so subsequent CHARGED rows are written to
+            # the CSV, then stop after the configured finish interval.
+            charged_at = tracker.ended_at if tracker.ended_at is not None else s.t
+            return (s.t - charged_at) <= tracker.debounce_finish and s.t < duration
         return s.t < duration
 
     def tick(elapsed: float) -> None:

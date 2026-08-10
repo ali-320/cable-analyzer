@@ -34,6 +34,9 @@ class SessionTracker:
         self.i_start = float(s.get("i_charge_start", 0.10))
         self.debounce_start = float(s.get("debounce_start_s", 5.0))
         self.debounce_end = float(s.get("debounce_end_s", 60.0))
+        # Keep collecting and logging CHARGED samples after the transition so
+        # the terminal state is visible in the CSV before charge mode exits.
+        self.debounce_finish = float(s.get("debounce_finish_s", 10.0))
         self.open_timeout = float(s.get("open_timeout_s", 30.0))
         self.v_present_min = 1.0
         self.v_target = float(v_target)
