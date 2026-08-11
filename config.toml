@@ -51,7 +51,7 @@ divider_r2_ohm = 10000
 [probe]
 voltages = [5, 9, 12]     # manual support checks and measurement ranges
 current_steps = [0.5, 1.0, 1.5, 2.0]   # e-load steps (A; automatic/GPIO mode)
-manual_support_readings = 50       # IDLE support samples per voltage (~2 s at 25 Hz)
+manual_support_readings = 50       # VERIFICATION support samples per voltage (~2 s at 25 Hz)
 manual_total_readings = 3000       # total PROBE samples divided among supported voltages
 manual_min_measurement_readings = 5 # floor per supported range
 step_hold_s = 5.0
@@ -72,8 +72,8 @@ i_fully_charged_min = 0.010 # A ; inclusive lower bound for the low-current phon
 i_fully_charged_max = 0.10  # A ; exclusive upper bound; normally equals charge start
 i_no_load = 0.05           # A ; analytics threshold for low-current dips/leakage (legacy feature setting)
 i_charge_start = 0.10     # A ; inclusive lower bound for active charging
-debounce_start_s = 3.0
-debounce_end_s = 10.0     # current in the fully-charged band for this long after charging = phone charged
+debounce_start_s = 2.0
+debounce_end_s = 3.0     # current in the fully-charged band for this long after charging = phone charged
 debounce_finish_s = 10.0  # keep logging CHARGED samples before ending charge mode
 charge_timeout_s = 7200   # give up waiting for CHARGED after this
 open_timeout_s = 5.0     # NO_PHONE this long while a phone is expected -> OPEN candidate

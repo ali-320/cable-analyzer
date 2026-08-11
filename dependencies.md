@@ -164,15 +164,20 @@ Run:
 python -m src.main --manual --mode probe --length 1.0
 ```
 Keep the phone connected. The program asks you to select 5 V, 9 V, and 12 V
-manually. For each voltage it first collects an IDLE support-check window
-(default 50 readings) and stores a `support_flags` entry. It then divides the
-measurement budget (default 3000 readings) equally among the voltages whose
-flag is true. Unsupported ranges are excluded; if 5 V is unsupported, the
-lowest supported higher voltage becomes the quality reference and the verdict is
-marked `FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
-separately and does not prove that the device rejects that voltage. If no current is observed in all three
-IDLE checks, the terminal reports `NO_CURRENT_ALL_VOLTAGES` and no cable grade
-is produced. All IDLE and PROBE readings remain in the session CSV.
+manually.For each voltage it first collects a `VERIFICATION` support-check window
+(default 50 readings) and stores a `support_flags` entry. Verification rows
+remain in the CSV for audit but are excluded from quality calculations. It then
+divides the measurement budget (default 3000 readings) equally among the
+voltages whose flag is true. Measurement rows are classified with the normal
+charge states (`IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or
+`FAULT`) and are eligible for quality calculations when valid and above the
+current threshold. Unsupported ranges are excluded; if 5 V is unsupported, the
+lowest supported higher voltage becomes the quality reference and the verdict
+is marked `FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
+separately and does not prove that the device rejects that voltage. If no
+current is observed in all three `VERIFICATION` checks, the terminal reports
+`NO_CURRENT_ALL_VOLTAGES` and no cable grade is produced. All raw probe-phase
+samples remain in the session CSV.
 
 Verify every manual voltage with a DMM. The software cannot isolate the phone
 or protect it from an incorrect SEL setting because CH224K GPIO is not wired.

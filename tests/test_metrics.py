@@ -61,6 +61,21 @@ class TestFeatures(unittest.TestCase):
         f = compute_features(samples, v_target=5.0, min_busy_samples=5)
         self.assertIsNone(f)
 
+    def test_verification_samples_are_excluded_from_features(self):
+        verification = [
+            Sample(t=k * 0.04, voltage=4.0, current=1.0, power=4.0, state="VERIFICATION")
+            for k in range(20)
+        ]
+        measurement = [
+            Sample(t=1.0 + k * 0.04, voltage=4.8, current=1.0, power=4.8, state="IDLE")
+            for k in range(20)
+        ]
+        f = compute_features(verification + measurement, v_target=5.0)
+        self.assertIsNotNone(f)
+        self.assertEqual(f["n_total"], len(measurement))
+        self.assertEqual(f["n_busy"], len(measurement))
+        self.assertAlmostEqual(f["r_mean"], 0.2, places=3)
+
     def test_full_phone_current_is_not_leakage(self):
         samples = make_samples(current=1.0, n=20)
         samples += [

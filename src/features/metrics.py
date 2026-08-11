@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from src.telemetry.models import Sample
 
-BUSY_STATES = {"CHARGING", "PROBE", "UNKNOWN", ""}
+# IDLE can contain active-current samples during the charging-start debounce.
+# The current threshold below is authoritative, so low-current IDLE samples
+# remain excluded while active probe samples remain usable for quality metrics.
+BUSY_STATES = {"IDLE", "CHARGING", "PROBE", "UNKNOWN", ""}
 
 
 def mean(xs) -> float:
@@ -81,8 +84,11 @@ def compute_features(
     spike_count or R statistics (DEVELOPMENT_PLAN.md §6.1 excludes
     transients).
     """
-    busy_all = _busy(samples, i_min)
-    valid = [s for s in samples if s.valid]
+    # VERIFICATION is a probe-only support-check phase. It may be present in
+    # the exported CSV, but it must never contribute to quality calculations.
+    analysis_samples = [s for s in samples if s.state != "VERIFICATION"]
+    busy_all = _busy(analysis_samples, i_min)
+    valid = [s for s in analysis_samples if s.valid]
     if len(busy_all) < min_busy_samples:
         return None
 
@@ -126,7 +132,7 @@ def compute_features(
     # (The trailing low-current debounce tail before CHARGED never recovers and
     # must not count as an intermittent contact.) Falls back to all valid
     # samples when there is no CHARGING state (probe mode).
-    charging = [s for s in samples if s.valid and s.state == "CHARGING"]
+    charging = [s for s in analysis_samples if s.valid and s.state == "CHARGING"]
     inter_frac = 0.0
     if charging:
         total = len(charging)
@@ -147,7 +153,9 @@ def compute_features(
 
     # spikes: |dI/dt| or |dV/dt| exceedance over a ~0.2 s window (averages
     # out ADC noise; a genuine arc is a real multi-mV jump, not 1-sample noise)
-    window = max(1, int(0.2 / max(samples[-1].t / max(len(samples), 1), 1e-6)))
+    window = max(1, int(0.2 / max(
+        analysis_samples[-1].t / max(len(analysis_samples), 1), 1e-6
+    )))
     spikes = 0
     for i in range(window, len(valid)):
         a, b = valid[i - window], valid[i]
@@ -159,7 +167,7 @@ def compute_features(
     # 0.0xx A maintenance current. Prefer explicit NO_PHONE samples; the
     # numeric fallback keeps probe/manual datasets compatible.
     idle = [
-        s for s in samples
+        s        for s in analysis_samples
         if s.valid and (
             s.state == "NO_PHONE"
             or (s.state == "IDLE" and s.current < i_no_phone)
@@ -202,8 +210,8 @@ def compute_features(
         "idle_I": idle_i,
         # --- quality meta ---
         "n_busy": len(busy),
-        "n_total": len(samples),
-        "valid_frac": (len(valid) / len(samples)) if samples else 0.0,
+        "n_total": len(analysis_samples),
+        "valid_frac": (len(valid) / len(analysis_samples)) if analysis_samples else 0.0,
         "duration_s": duration,
         "v_target": v_target,
         "r_fixture": r_fixture,

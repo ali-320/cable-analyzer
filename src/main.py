@@ -13,8 +13,10 @@ operator changes CH224K SEL straps by hand and confirms the measured voltage
 at each step; no CH224K GPIO/PWR_OK pins are used.
 
 The manual setup now places the INA219 inline between CH224K VBUS and the
-phone. Manual mode first checks voltage support during IDLE windows, then
-allocates the measurement budget across supported 5 V, 9 V, and 12 V ranges.
+phone. Manual mode first verifies voltage support during VERIFICATION windows,
+then allocates the measurement budget across supported 5 V, 9 V, and 12 V
+ranges. Measurement samples use the normal charge states (IDLE, CHARGING,
+CHARGED, NO_PHONE, NO_SOURCE, or FAULT).
 Unsupported ranges are excluded; if 5 V is unsupported, the highest supported
 range is used as the quality reference and reported explicitly.
 """
@@ -221,9 +223,49 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         current_voltage = target_v
         return verify_rail(target_v, require_step=require_step)
 
-    def collect(count: int, state: str) -> list[Sample]:
+    def collect(
+        count: int,
+        phase_state: str,
+        tracker: SessionTracker | None = None,
+    ) -> list[Sample]:
+        """Collect one probe phase and print a live sample every second.
+
+        VERIFICATION is a probe-only phase. Measurement phases are annotated by
+        SessionTracker so their CSV states match charge mode (IDLE, CHARGING,
+        CHARGED, NO_PHONE, NO_SOURCE, or FAULT).
+        """
         duration = max(count, 1) / max(rate, 1e-6)
-        samples = Sampler(reader, rate, simulate).run(duration, state=state)
+        next_report_s = 1.0
+        # Verification is a distinct CSV phase, but it still receives the
+        # same hardware safety checks as charge-mode samples. Normal samples
+        # retain VERIFICATION; a real safety fault is labeled FAULT.
+        safety_tracker = (
+            SessionTracker(cfg, v_target=float(current_voltage or 5), phone_expected=False)
+            if phase_state == "VERIFICATION" and tracker is None
+            else None
+        )
+
+        def on_sample(sample: Sample) -> bool:
+            nonlocal next_report_s
+            if tracker is not None:
+                state, _event = tracker.update(sample)
+            elif safety_tracker is not None:
+                safety_state, _event = safety_tracker.update(sample)
+                state = safety_state
+                sample.state = "FAULT" if safety_state == "FAULT" else phase_state
+            else:
+                state = phase_state
+                sample.state = phase_state
+            if sample.t + 1e-9 >= next_report_s:
+                cli.print_live(sample)
+                next_report_s = sample.t + 1.0
+            # A hardware safety fault is terminal for this phase. Keep the
+            # fault sample in the CSV, but do not continue probing the phone.
+            return state != "FAULT"
+
+        samples = Sampler(
+            reader, rate, simulate
+        ).run(duration, on_sample=on_sample, state=phase_state)
         session_samples.extend(samples)
         return samples
 
@@ -232,8 +274,9 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         "pd_blocked": [],
         "manual_voltage_mode": True,
         "measurement_note": (
-            "Support flags are determined during IDLE windows. Measurements are "
-            "allocated across supported voltages; unsupported ranges are excluded."
+            "Support flags are determined during VERIFICATION windows. Measurements are "
+            "allocated across supported voltages and use normal charge-state "
+            "labels; unsupported ranges are excluded."
         ),
         "r_fixture": r_fixture,
         "support_flags": {},
@@ -247,7 +290,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
     }
 
     for v in voltages:
-        record = {"v_target": v, "support_check_state": "IDLE"}
+        record = {"v_target": v, "support_check_state": "VERIFICATION"}
         if not select_voltage(v):
             support_flags[str(v)] = False
             support_observations[str(v)] = "rail_not_verified"
@@ -257,7 +300,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
             manual_readings.append(record)
             continue
 
-        check_samples = collect(support_n, state="IDLE")
+        check_samples = collect(support_n, phase_state="VERIFICATION")
         valid = [s for s in check_samples if s.valid]
         active = [s for s in valid if s.current >= i_start]
         active_fraction = len(active) / len(valid) if valid else 0.0
@@ -265,8 +308,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         support_flags[str(v)] = supports
         support_observations[str(v)] = "current_observed" if supports else "no_current_observed"
         record.update({
-            "supports_voltage": supports,
-            "support_reason": "charging_current_in_IDLE" if supports else "no_current_in_IDLE",
+            "supports_voltage": supports,                "support_reason": "charging_current_in_VERIFICATION" if supports else "no_current_in_VERIFICATION",
             "support_i_mean": round(sum(s.current for s in valid) / len(valid), 4) if valid else 0.0,
             "support_active_fraction": round(active_fraction, 3),
             "support_n_valid": len(valid),
@@ -276,7 +318,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
             supported.append(v)
         else:
             results["unsupported_voltages"].append(v)
-            print(f"  No charging current detected in the IDLE check at {v:g} V; support flag = False.")
+            print(f"  No charging current detected in the VERIFICATION check at {v:g} V; support flag = False.")
 
     results["support_flags"] = support_flags
 
@@ -296,7 +338,8 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
                 rail_mismatch_voltages.append(v)
                 continue
             count = allocations[v]
-            samples = collect(count, state="PROBE")
+            tracker = SessionTracker(cfg, v_target=float(v), phone_expected=True)
+            samples = collect(count, phase_state="UNKNOWN", tracker=tracker)
             valid = [s for s in samples if s.valid]
             i_mean = sum(s.current for s in valid) / len(valid) if valid else 0.0
             record = next(r for r in manual_readings if r["v_target"] == v)
@@ -323,10 +366,14 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
 
     results["support_flags"] = support_flags
     results["support_observations"] = support_observations
-    results["no_current_all_voltages"] = not voltage_features and all(
-        support_flags.get(str(v)) is False
-        and support_observations.get(str(v)) == "no_current_observed"
-        for v in (5, 9, 12)
+    results["no_current_all_voltages"] = (
+        not voltage_features
+        and bool(voltages)
+        and all(
+            support_flags.get(str(v)) is False
+            and support_observations.get(str(v)) == "no_current_observed"
+            for v in voltages
+        )
     )
     if results["no_current_all_voltages"]:
         print("  No current is flowing in the 5 V, 9 V, or 12 V ranges.")
@@ -437,8 +484,12 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
         """Return to 5 V after an unsupported/mismatched higher voltage."""
         _manual_voltage_confirmation(5.0)
         ch224k.set_voltage(5.0)
-        recovery = Sampler(reader, rate, simulate).run(hold_seconds, state="PROBE")
-        session_samples.extend(recovery)
+        recovery_tracker = SessionTracker(cfg, v_target=5.0, phone_expected=True)
+        recovery = collect(
+            max(1, int(round(hold_seconds * rate))),
+            phase_state="UNKNOWN",
+            tracker=recovery_tracker,
+        )
         recovery_valid = [s for s in recovery if s.valid]
         recovery_i = (
             sum(s.current for s in recovery_valid) / len(recovery_valid)

@@ -67,10 +67,17 @@ def evaluate(
     # --- 2. no/insufficient charging data ---
     probe = meta.get("probe") or {}
     if features is None and probe.get("no_current_all_voltages"):
+        tested_voltages = probe.get("support_flags") or {}
+        tested_text = ", ".join(
+            f"{float(v):g} V" for v in tested_voltages
+        ) or "configured voltage ranges"
         base.update(
             verdict="NO_CURRENT_ALL_VOLTAGES",
             tags=["NO_CURRENT_ALL_VOLTAGES"],
-            evidence=["no charging current measured during IDLE checks at 5 V, 9 V, or 12 V"],
+            evidence=[
+                "no charging current measured during VERIFICATION checks at "
+                f"{tested_text}"
+            ],
         )
         return base
     if features is None:

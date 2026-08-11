@@ -10,9 +10,40 @@ from src.hardware.load_ctrl import LoadController
 from src.hardware.sim import SimState
 from src.main import run_probe
 from src.telemetry.storage import Storage
+from src.ui import cli
 
 
 class TestProbeCsvCollection(unittest.TestCase):
+    def test_manual_probe_labels_verification_and_measurement_states(self):
+        state = SimState(current=0.5, v_target=5.0)
+        cfg = {
+            "hardware": {"simulate": False, "sample_rate_hz": 10.0},
+            "ch224k": {"control_mode": "manual", "sel_truth": {5: 0}},
+            "probe": {"voltages": [5], "manual_support_readings": 12,
+                      "manual_total_readings": 20, "manual_min_measurement_readings": 5},
+            "measurement": {"r_fixture_ohm": 0.0, "i_min_compute": 0.1},
+            "session": {"i_no_phone_max": 0.01, "i_fully_charged_min": 0.01,
+                        "i_fully_charged_max": 0.1, "i_charge_start": 0.1,
+                        "i_no_load": 0.05, "debounce_start_s": 0.2,
+                        "debounce_end_s": 0.2, "debounce_finish_s": 10.0},
+        }
+        reader = INA219Reader(cfg, simulate=True, sim_state=state)
+        ch224k = CH224KController(PinMap(), cfg, simulate=False, sim_state=state)
+        load = LoadController(PinMap(), cfg, simulate=False, sim_state=state)
+        try:
+            with patch("builtins.input", return_value="5"), patch.object(cli, "print_live") as live:
+                probe = run_probe(cfg, reader, ch224k, load, state)
+            samples = probe.pop("_samples")
+            self.assertTrue(samples)
+            self.assertTrue(any(s.state == "VERIFICATION" for s in samples))
+            measurement_states = {s.state for s in samples if s.state != "VERIFICATION"}
+            self.assertTrue(measurement_states & {"IDLE", "CHARGING"})
+            self.assertGreaterEqual(live.call_count, 1)
+        finally:
+            ch224k.close()
+            load.close()
+            reader.shutdown()
+
     def test_manual_probe_returns_samples_for_export(self):
         state = SimState(current=0.5, v_target=5.0)
         cfg = {

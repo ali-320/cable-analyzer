@@ -14,9 +14,10 @@ For every sample in the session, the function first establishes three working li
 
 | Working variable | Definition |
 |------------------|-----------|
-| `busy_all` | samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"CHARGING", "PROBE", "UNKNOWN", ""}` |
+| `analysis_samples` | all samples except `VERIFICATION`; verification rows remain in the CSV but are excluded from feature calculations | 
+| `busy_all` | non-`VERIFICATION` samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"IDLE", "CHARGING", "PROBE", "UNKNOWN", ""}` |
 | `busy` (steady-only) | subset of `busy_all` where `current ≥ steady_frac · peak_i` (`steady_frac = 0.5`) — used for stability features so the phone's current ramp-up / CC→CV taper-down do not pollute them |
-| `valid` | all samples with `valid == True` (range-checked I²C reads) |
+| `valid` | valid non-`VERIFICATION` samples (range-checked I²C reads); verification rows remain available in the CSV but are excluded from features |
 
 Per-sample derived quantities (used in #1–8 below):
 
@@ -181,12 +182,12 @@ Units: W (watts). This is the average heat dissipated by the test cable, connect
 Trapezoidal integration of instantaneous power, then unit conversion:
 
 ```text
-E_J    = Σᵢ ((V[i] · I[i]) · Δt)         over all valid samples
+E_J    = Σᵢ ((V[i] · I[i]) · Δt)         over all valid non-VERIFICATION samples
        = Σᵢ (power[i] · (t[i] − t[i−1]))
 E_wh   = E_J / 3600
 ```
 
-Units: Wh (watt-hours). Note this is **all** valid samples, not the busy subset — the integrator walks the full session timeline.
+Units: Wh (watt-hours). The integrator walks the full non-VERIFICATION timeline, including valid low-current measurement samples but excluding support-check readings.
 
 ---
 
@@ -206,7 +207,7 @@ A positive value means the cable is heating up during the test (resistance rises
 ### 17. `interruption_frac` — share of charging samples that are inside intermittent dips
 
 ```text
-charging = [s for s in samples if s.valid AND s.state == "CHARGING"]
+charging = [s for s in analysis_samples if s.valid AND s.state == "CHARGING"]
 
 if charging is non-empty:
     walk charging left-to-right, count every sample that lies in a dip
@@ -243,7 +244,7 @@ Unitless. Genuine arc / bad-contact events are typically 5–50 mV / 0.1–1 A i
 ### 19. `idle_I` — mean current of true-IDLE samples
 
 ```text
-idle       = [s for s in samples if s.valid AND (s.state == "NO_PHONE" OR (s.state == "IDLE" AND s.current < i_no_phone))]
+idle       = [s for s in analysis_samples if s.valid AND (s.state == "NO_PHONE" OR (s.state == "IDLE" AND s.current < i_no_phone))]
 idle_I     = mean(I[s])        if idle is non-empty
 idle_I     = None              otherwise
 ```
@@ -265,7 +266,7 @@ Unitless. The dividing line between "trusted grade" and "no grade" is `n_busy �
 ### 21. `valid_frac` — proportion of valid I²C reads
 
 ```text
-valid_frac = len(valid) / len(samples)
+valid_frac = len(valid) / len(analysis_samples)
 ```
 
 Unitless `[0, 1]`. A `valid` row means `read_ok == True AND validate_sample(...)` returned OK (non-NaN/Inf, V in `[0, 26]` V, I in `[-1.0, 3.5]` A, non-zero period). Used in the confidence formula in `rules.py::evaluate()`.
@@ -288,7 +289,7 @@ Units: s. Used as session-length context; the 10-second sliding window used by `
 | `v_target`  | argument to `compute_features()` | Echoed so the verdict can show "target 5.0 V"                       |
 | `r_fixture` | argument to `compute_features()` | Echoed so the verdict can show the baseline that was subtracted     |
 | `length_m`  | argument to `compute_features()` | Optional per-metre normalisation in `rules.py::evaluate()`          |
-| `n_total`   | `len(samples)`                   | Total sample count, valid + invalid — used for confidence weighting |
+| `n_total`   | `len(analysis_samples)`          | Total non-VERIFICATION sample count, valid + invalid — used for confidence weighting |
 
 These four are not engineered features; they are bookkeeping fields the verdict engine expects to see in the same dict.
 
@@ -334,5 +335,5 @@ So the engineered features 1, 2, 6, 21, and 22 directly drive what `verdict.conf
 | 18 | `spike_count` | exceedances of 2 A/s or 0.2 V/s over 0.2 s windows | — |
 | 19 | `idle_I` | `mean(I)` over `NO_PHONE` samples (or legacy low-current fallback) | A |
 | 20 | `n_busy` | `len(busy)` | samples |
-| 21 | `valid_frac` | `len(valid) / len(samples)` | fraction |
+| 21 | `valid_frac` | `len(valid) / len(analysis_samples)` | fraction |
 | 22 | `duration_s` | `valid[−1].t − valid[0].t` | s |

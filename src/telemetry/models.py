@@ -10,14 +10,18 @@ class Sample:
 
     ``t`` is seconds since the acquisition started (monotonic ordering).
     ``state`` is annotated by the :class:`SessionTracker` as samples stream
-    through it (NO_SOURCE / IDLE / CHARGING / CHARGED / FAULT), or "PROBE"
-    for controlled-load probe samples.
+    through it (NO_SOURCE / NO_PHONE / IDLE / CHARGING / CHARGED / FAULT), or
+    is ``VERIFICATION`` for manual voltage-support checks and ``PROBE`` for
+    controlled-load probe samples.
     """
 
     t: float
     voltage: float
     current: float
     power: float
+    # Manual probe uses VERIFICATION for support checks. Measurement samples
+    # are stamped with the normal SessionTracker states; automatic load probes
+    # may still use PROBE.
     state: str = "UNKNOWN"
     valid: bool = True
     flags: list = field(default_factory=list)
