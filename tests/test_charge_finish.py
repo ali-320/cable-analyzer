@@ -46,7 +46,10 @@ class TestChargeFinishWindow(unittest.TestCase):
         self.assertIsNotNone(tracker.ended_at)
         charged = [sample for sample in samples if sample.state == CHARGED]
         self.assertGreaterEqual(len(charged), 2)
-        self.assertEqual(charged[0].t, tracker.ended_at)
+        # The low-current debounce candidate is retroactively labeled CHARGED,
+        # so its first row can precede the confirmation timestamp.
+        self.assertLessEqual(charged[0].t, tracker.ended_at)
+        self.assertGreaterEqual(charged[0].t, tracker.ended_at - 0.4 - 0.1)
         self.assertGreaterEqual(samples[-1].t - tracker.ended_at, 0.4)
         self.assertLessEqual(samples[-1].t - tracker.ended_at, 0.4 + 0.1)
         self.assertEqual(meta.ended_at, samples[-1].t)

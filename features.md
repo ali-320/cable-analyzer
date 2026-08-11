@@ -10,7 +10,7 @@ The return dict contains **26 keys total** — **22 computed/engineered features
 
 ## Pre-computation setup (shared across all features)
 
-For every sample in the session, the function first establishes three working lists:
+For every sample in the session, the state labels already include any confirmed retroactive debounce corrections. The function then establishes three working lists:
 
 | Working variable | Definition |
 |------------------|-----------|

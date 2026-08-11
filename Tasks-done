@@ -18,3 +18,5 @@ We can change this by sepcifying the duration in the python command.
 8. The time to enter in the charging state and leave the charging state is contolled by the debounce_start_s and debounce_end_s.
 9. Introduced the VERIFICATION stage, in PROBE mode in which it first checks what voltages are supported by the device.
 Now it shows CHARGING, IDLE, AND CHARGED mode in PROBE mdoe as well.
+10. Added the functionality of ignoring un-necessary interrupts, such that when the mobile is disconnected, and ignoring 
+the faulty state readings caused by the debounce time.

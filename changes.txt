@@ -61,3 +61,94 @@ Changed files and abstract logic
 Validation
 ----------
 The configuration was parsed successfully, all modified Python files compiled successfully, and the complete test suite passed with 58 tests and no failures or errors.
+
+
+Additional requested changes
+============================
+
+A. PROBE-mode state and VERIFICATION phase
+-------------------------------------------
+
+1. Prompt given
+   The manual PROBE workflow must use a probe-only `VERIFICATION` state while voltage support flags are checked. The longer measurement windows must use the normal charge states (`IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, and `FAULT`). Verification samples must be excluded from quality calculations but retained in the CSV, and live readings must be shown approximately once per second.
+
+2. Changed files and abstract logic
+
+   a. cable-analyzer/src/main.py
+      Lines: 16, 170–390, 233–260, 281–341, and 357–390.
+      Abstract logic: Separates manual voltage-support checks from measurement phases, labels support samples as `VERIFICATION`, routes measurement samples through `SessionTracker`, prints live samples at one-second intervals, stops a phase on safety faults, and excludes unsupported voltage ranges from measurement allocation.
+
+   b. cable-analyzer/src/telemetry/models.py
+      Lines: 12–14 and 22–23.
+      Abstract logic: Documents the expanded sample-state vocabulary, including the probe-only `VERIFICATION` state and normal charge states used for manual measurements.
+
+   c. cable-analyzer/src/features/metrics.py
+      Lines: 15–18, 87–91, 132–135, 157, 170, and 211–214.
+      Abstract logic: Excludes `VERIFICATION` samples from resistance, stability, interruption, leakage, energy, duration, and validity calculations while allowing active-current measurement samples labeled `IDLE` during a pending charging transition to remain eligible.
+
+   d. cable-analyzer/src/analysis/rules.py
+      Lines: 70–85 and 165–166.
+      Abstract logic: Reports no-current evidence using the actual voltage-support verification ranges rather than assuming a fixed set of ranges.
+
+   e. cable-analyzer/config.toml
+      Lines: 51–55.
+      Abstract logic: Identifies the support-reading allocation as the `VERIFICATION` phase while retaining the configured measurement budget for supported ranges.
+
+   f. cable-analyzer/tests/test_probe_csv.py
+      Lines: 17–57.
+      Abstract logic: Verifies that manual probe output contains `VERIFICATION` samples, normal measurement states, and one-second live-output callbacks, while preserving CSV export coverage.
+
+   g. cable-analyzer/tests/test_metrics.py
+      Lines: 64–82.
+      Abstract logic: Verifies that verification samples do not affect feature counts or resistance results.
+
+   h. cable-analyzer/states.md
+      Lines: 26, 49, and 53–55.
+      Abstract logic: Documents `VERIFICATION` as a probe-only state, explains that measurement samples use charge states, and clarifies that verification rows are retained for audit but excluded from quality calculations.
+
+   i. cable-analyzer/features.md
+      Lines: 13–20, 185–190, 210, 269, 292, and 338.
+      Abstract logic: Updates the feature definitions to distinguish analysis samples from verification samples and describes the exclusion consistently across feature formulas and metadata.
+
+   j. cable-analyzer/dependencies.md
+      Lines: 167–206.
+      Abstract logic: Updates the manual run instructions and expected behavior to describe `VERIFICATION` support windows, charge-state measurement rows, and CSV retention.
+
+3. Validation
+   The Python source and tests compiled successfully. The focused PROBE, CSV, metrics, and state tests passed, and the full suite passed with no failures or errors during the completed implementation cycle.
+
+
+B. Retroactive debounce-state labeling
+--------------------------------------
+
+1. Prompt given
+   With a 2-second charging-entry debounce and corresponding debounce periods for other transitions, samples collected during a pending transition must not remain incorrectly labeled with the previous state. Confirmed candidate samples should be treated as the new state—or otherwise excluded—so the same correction applies to `CHARGING`, `CHARGED`, `NO_PHONE`, and `IDLE` transitions.
+
+2. Changed files and abstract logic
+
+   a. cable-analyzer/src/telemetry/session.py
+      Lines: 14–17, 60–64, 84–107, 115, 123–124, 140, 163, 184–197, 206–223, and 229–247.
+      Abstract logic: Adds a pending-transition buffer that temporarily retains candidate samples, relabels them to the destination state when the debounce period is completed, preserves the previous state when the candidate is interrupted, cancels candidates after invalid readings, handles `IDLE`/`NO_PHONE` changes consistently, and keeps `NO_SOURCE` and `FAULT` immediate.
+
+   b. cable-analyzer/tests/test_session.py
+      Lines: 16–18, 52–83, 106–139, 149–182, and 194–236.
+      Abstract logic: Tests retroactive labeling for charging start, charged completion, disconnection, IDLE/no-phone changes, interrupted candidates, invalid readings, immediate source loss, and terminal faults.
+
+   c. cable-analyzer/tests/test_charge_finish.py
+      Lines: 13, 18, 27–29, and 49–55.
+      Abstract logic: Confirms that the charge finish window still logs corrected `CHARGED` samples and stops only after the configured finish interval.
+
+   d. cable-analyzer/states.md
+      Lines: 22–24, 39–41, and 49–55.
+      Abstract logic: Documents that confirmed debounce candidates are relabeled retroactively, interrupted candidates retain their previous state, invalid readings cancel candidates, and source-loss/fault transitions remain immediate.
+
+   e. cable-analyzer/features.md
+      Lines: 13–20.
+      Abstract logic: Clarifies that feature extraction receives the corrected state labels after debounce resolution.
+
+   f. cable-analyzer/config.toml
+      Lines: 75–77.
+      Abstract logic: Retains the requested debounce configuration: 2 seconds to enter `CHARGING`, 3 seconds for the charged-state transition, and 10 seconds of post-`CHARGED` logging.
+
+3. Validation
+   All modified Python files compiled successfully. The final complete test suite ran 67 tests with 0 failures and 0 errors.

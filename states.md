@@ -44,6 +44,10 @@ open_timeout_s = 5.0
 
 The implementation validates that the bands are contiguous: `i_no_phone_max == i_fully_charged_min` and `i_fully_charged_max == i_charge_start`. `i_no_load` remains as a legacy analytics threshold; it is no longer the primary state boundary.
 
+## Debounce labeling
+
+A transition candidate is not immediately accepted as a new state. Samples collected during the candidate window initially carry the previous confirmed state. If the candidate remains valid for its configured debounce time, those buffered samples are relabeled to the newly confirmed state. Therefore, the `debounce_start_s` samples before `CHARGING`, the `debounce_end_s` samples before `CHARGED`, and the debounce samples before confirmed `NO_PHONE`/`IDLE` changes do not remain falsely attributed to the previous state. If the candidate is interrupted, the samples retain the previous confirmed state. Invalid sensor reads cancel a pending candidate, while loss of VBUS (`NO_SOURCE`) and safety faults are immediate exceptions. The terminal live print cannot be changed retroactively, but the in-memory samples, CSV, SQLite records, and feature calculations use the corrected labels.
+
 ## Probe-mode distinction
 
 In manual probe mode, the short support window is labeled `VERIFICATION`. Its samples are retained in the CSV for audit but excluded from all quality features. The longer measurement windows are passed through `SessionTracker`, so each sample is labeled `IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or `FAULT` according to the measured voltage/current and configured debounce values. These measurement samples are eligible for feature extraction when they meet the normal validity and current thresholds.
