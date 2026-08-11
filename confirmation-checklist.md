@@ -1,6 +1,8 @@
 Things to understand
 
-- [ ] Give me the all the grades that you are using, the quality decisions in each grade, and the metrics value that send the cable to each grade.
+- [x] Give me the all the grades that you are using, the quality decisions in each grade, and the metrics value that send the cable to each grade.
+> [!INFO] Answer
+> It is present in the 
 
 - [x] Do we still have the charge mode in this the current code. If yes, then what is it's difference from the probe mode, when the mobile charging is in the path.
 

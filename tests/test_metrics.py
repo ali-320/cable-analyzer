@@ -4,6 +4,7 @@ import unittest
 from tests.helpers import make_samples
 
 from src.features.metrics import compute_features, linreg, percentile, stdev
+from src.telemetry.models import Sample
 
 
 class TestBasicStats(unittest.TestCase):
@@ -60,14 +61,31 @@ class TestFeatures(unittest.TestCase):
         f = compute_features(samples, v_target=5.0, min_busy_samples=5)
         self.assertIsNone(f)
 
+    def test_full_phone_current_is_not_leakage(self):
+        samples = make_samples(current=1.0, n=20)
+        samples += [
+            Sample(t=1.0 + k * 0.04, voltage=5.0, current=0.03, power=0.15, state="IDLE")
+            for k in range(20)
+        ]
+        f = compute_features(samples, v_target=5.0, i_no_phone=0.01)
+        self.assertIsNotNone(f)
+        self.assertIsNone(f["idle_I"])
+
+    def test_full_phone_current_is_not_counted_as_interruption(self):
+        samples = make_samples(current=1.0, n=20)
+        samples[10].current = 0.03
+        f = compute_features(samples, v_target=5.0, i_no_phone=0.01)
+        self.assertIsNotNone(f)
+        self.assertEqual(f["interruption_frac"], 0.0)
+
     def test_interruption_frac_counts_recovered_dips_only(self):
         samples = make_samples(current=1.0, n=200, period=0.04)
         # make a 5-sample dip that recovers
         for k in range(10, 15):
-            samples[k].current = 0.01
+            samples[k].current = 0.005
         # trailing 40 samples near zero (charge completion tail) - must NOT count
         for k in range(160, 200):
-            samples[k].current = 0.01
+            samples[k].current = 0.005
         f = compute_features(samples, v_target=5.0)
         self.assertAlmostEqual(f["interruption_frac"], 5 / 200, places=3)
 

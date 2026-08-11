@@ -59,12 +59,36 @@ def print_probe(probe: dict) -> None:
             f"R_cable={step['r_cable_mohm']:>7.1f} mΩ"
         )
     for reading in probe.get("manual_readings", []):
-        print(
-            f"  manual V_target={reading['v_target']:>5.1f} V  "
-            f"V_mean={reading['v_mean'] if reading['v_mean'] is not None else 'n/a'} V  "
-            f"I_mean={reading['i_mean'] if reading['i_mean'] is not None else 'n/a'} A  "
-            f"valid={reading['n_valid']}"
-        )
+        if "supports_voltage" in reading:
+            print(
+                f"  support V={reading['v_target']:>5.1f} V  "
+                f"flag={reading['supports_voltage']}  "
+                f"I_mean={reading.get('support_i_mean', 0.0):.4f} A  "
+                f"valid={reading.get('support_n_valid', 0)}  "
+                f"reason={reading.get('support_reason', '-')}"
+            )
+        if "measurement_n" in reading:
+            print(
+                f"  measure V={reading['v_target']:>5.1f} V  "
+                f"I_mean={reading.get('measurement_i_mean', 0.0):.4f} A  "
+                f"valid={reading.get('measurement_n_valid', 0)} / {reading['measurement_n']}"
+            )
+        elif "v_mean" in reading:
+            # Backwards-compatible display for legacy manual summaries.
+            print(
+                f"  manual V_target={reading['v_target']:>5.1f} V  "
+                f"V_mean={reading.get('v_mean') if reading.get('v_mean') is not None else 'n/a'} V  "
+                f"I_mean={reading.get('i_mean') if reading.get('i_mean') is not None else 'n/a'} A  "
+                f"valid={reading.get('n_valid', 0)}"
+            )
+    if probe.get("measurement_allocations"):
+        print(f"  measurement allocation (readings): {probe['measurement_allocations']}")
+    if probe.get("quality_reference_voltage"):
+        print(f"  quality reference voltage: {probe['quality_reference_voltage']} V")
+    if probe.get("quality_reference_note"):
+        print(f"  note: {probe['quality_reference_note']}")
+    if probe.get("no_current_all_voltages"):
+        print("  !! no current flowed in the 5 V, 9 V, or 12 V ranges")
     unsupported = probe.get("unsupported_voltages") or []
     if unsupported:
         print(f"  compatibility: phone drew no current at {unsupported} V; excluded from quality grade")
@@ -77,6 +101,9 @@ def print_probe(probe: dict) -> None:
     mismatch = probe.get("manual_voltage_mismatch") or []
     if mismatch:
         print(f"  !! measured voltage did not match requested voltage at: {mismatch} V")
+    rail_mismatch = probe.get("rail_mismatch_voltages") or []
+    if rail_mismatch:
+        print(f"  !! rail verification failed at: {rail_mismatch} V (support not determined)")
     blocked = probe.get("pd_blocked") or []
     if blocked:
         print(f"  !! PD negotiation FAILED at: {blocked} V  (cable blocks CC/PD signaling)")

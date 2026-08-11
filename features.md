@@ -32,7 +32,7 @@ Inputs to the function (from `config.toml` / CLI):
 - `r_fixture`: calibrated board/baseline resistance in **ohms** (from `data/calibration.json` if present, else `measurement.r_fixture_ohm` in `config.toml`)
 - `length_m`: cable length in metres (optional — used only for per-metre normalisation in `rules.py`, not in this function)
 - `i_min_compute = 0.10 A`
-- `i_no_load ≤ 0.05 A`
+- `i_no_phone_max = 0.010 A` for no-phone leakage; the connected/full-phone band ends at `i_fully_charged_max = 0.100 A`
 - `min_busy_samples = 5`
 - `steady_frac = 0.5`
 
@@ -210,12 +210,12 @@ charging = [s for s in samples if s.valid AND s.state == "CHARGING"]
 
 if charging is non-empty:
     walk charging left-to-right, count every sample that lies in a dip
-    where current < i_no_load (default 0.05 A)
-    AND the dip recovers back above i_no_load before the run ends
+    where current < i_no_phone_max (default 0.010 A)
+    AND the dip recovers back above i_no_phone_max before the run ends
     dips = # such samples
     interruption_frac = dips / len(charging)
 else:                                               # probe mode (no CHARGING run)
-    interruption_frac = mean(1.0 if current < i_no_load else 0.0)      over valid samples
+    interruption_frac = mean(1.0 if current < i_no_phone_max else 0.0)      over valid samples
 ```
 
 Trailing low-current debounce tail before a CHARGED transition is excluded because the run does not recover.
@@ -243,7 +243,7 @@ Unitless. Genuine arc / bad-contact events are typically 5–50 mV / 0.1–1 A i
 ### 19. `idle_I` — mean current of true-IDLE samples
 
 ```text
-idle       = [s for s in samples if s.valid AND s.state == "IDLE" AND s.current < i_no_load]
+idle       = [s for s in samples if s.valid AND (s.state == "NO_PHONE" OR (s.state == "IDLE" AND s.current < i_no_phone))]
 idle_I     = mean(I[s])        if idle is non-empty
 idle_I     = None              otherwise
 ```
@@ -283,12 +283,12 @@ Units: s. Used as session-length context; the 10-second sliding window used by `
 
 ## Pass-through metadata fields (not computed, included in the dict)
 
-| Key | Source | Purpose |
-|-----|--------|---------|
-| `v_target` | argument to `compute_features()` | Echoed so the verdict can show "target 5.0 V" |
-| `r_fixture` | argument to `compute_features()` | Echoed so the verdict can show the baseline that was subtracted |
-| `length_m` | argument to `compute_features()` | Optional per-metre normalisation in `rules.py::evaluate()` |
-| `n_total` | `len(samples)` | Total sample count, valid + invalid — used for confidence weighting |
+| Key         | Source                           | Purpose                                                             |
+| ----------- | -------------------------------- | ------------------------------------------------------------------- |
+| `v_target`  | argument to `compute_features()` | Echoed so the verdict can show "target 5.0 V"                       |
+| `r_fixture` | argument to `compute_features()` | Echoed so the verdict can show the baseline that was subtracted     |
+| `length_m`  | argument to `compute_features()` | Optional per-metre normalisation in `rules.py::evaluate()`          |
+| `n_total`   | `len(samples)`                   | Total sample count, valid + invalid — used for confidence weighting |
 
 These four are not engineered features; they are bookkeeping fields the verdict engine expects to see in the same dict.
 
@@ -332,7 +332,7 @@ So the engineered features 1, 2, 6, 21, and 22 directly drive what `verdict.conf
 | 16 | `dR_dt_mOhm_per_min` | `(slope(r_cable vs t) [Ω/s]) · 60 000` | mΩ/min |
 | 17 | `interruption_frac` | dips/CHARGING (or fallback over valid) | fraction |
 | 18 | `spike_count` | exceedances of 2 A/s or 0.2 V/s over 0.2 s windows | — |
-| 19 | `idle_I` | `mean(I)` over `state==IDLE` and `I < i_no_load` | A |
+| 19 | `idle_I` | `mean(I)` over `NO_PHONE` samples (or legacy low-current fallback) | A |
 | 20 | `n_busy` | `len(busy)` | samples |
 | 21 | `valid_frac` | `len(valid) / len(samples)` | fraction |
 | 22 | `duration_s` | `valid[−1].t − valid[0].t` | s |

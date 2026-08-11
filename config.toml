@@ -49,24 +49,34 @@ divider_r1_ohm = 100000
 divider_r2_ohm = 10000
 
 [probe]
-voltages = [5, 9, 12]     # manual order: 5 V quality, then 9/12 V compatibility checks
-current_steps = [0.5, 1.0, 1.5, 2.0]   # e-load steps (A)
+voltages = [5, 9, 12]     # manual support checks and measurement ranges
+current_steps = [0.5, 1.0, 1.5, 2.0]   # e-load steps (A; automatic/GPIO mode)
+manual_support_readings = 50       # IDLE support samples per voltage (~2 s at 25 Hz)
+manual_total_readings = 3000       # total PROBE samples divided among supported voltages
+manual_min_measurement_readings = 5 # floor per supported range
 step_hold_s = 5.0
 transient_drop_s = 1.0    # first N seconds of a step are discarded (settling)
 heat_hold_s = 60.0        # longest step held to expose self-heating (dR/dt)
 heat_step_index = -1      # index into current_steps used for the heating hold
-manual_hold_s = 5.0        # observation time per manual 9/12 V compatibility check
-manual_5v_hold_s = 60.0    # many readings used for 5 V quality analysis
-recovery_hold_s = 20.0      # 5 V readings after an unsupported higher-voltage step
+manual_hold_s = 5.0        # legacy observation time; adaptive mode uses reading counts
+manual_5v_hold_s = 60.0    # legacy manual hold; adaptive mode uses manual_total_readings
+recovery_hold_s = 20.0      # automatic/legacy recovery only; adaptive manual mode does not assume 5 V recovery
 
 [session]
-i_no_load = 0.05          # A ; I below this = "not charging" / "charged"
-i_charge_start = 0.10     # A ; I above this (sustained) = charging started
-debounce_start_s = 5.0
-debounce_end_s = 60.0     # I < i_no_load for this long after charging = phone charged
+# Current bands measured at the phone side of the inline INA219.
+# 0.000-0.009 A: no phone/load (board leakage only).
+# 0.010-0.099 A: phone is connected but in its low-current/fully-charged band.
+# >=0.100 A: phone is actively charging.
+i_no_phone_max = 0.010    # A ; strictly below this = NO_PHONE
+i_fully_charged_min = 0.010 # A ; inclusive lower bound for the low-current phone band
+i_fully_charged_max = 0.10  # A ; exclusive upper bound; normally equals charge start
+i_no_load = 0.05           # A ; analytics threshold for low-current dips/leakage (legacy feature setting)
+i_charge_start = 0.10     # A ; inclusive lower bound for active charging
+debounce_start_s = 3.0
+debounce_end_s = 10.0     # current in the fully-charged band for this long after charging = phone charged
 debounce_finish_s = 10.0  # keep logging CHARGED samples before ending charge mode
 charge_timeout_s = 7200   # give up waiting for CHARGED after this
-open_timeout_s = 30.0     # IDLE this long while a phone is expected -> OPEN candidate
+open_timeout_s = 5.0     # NO_PHONE this long while a phone is expected -> OPEN candidate
 
 [measurement]
 i_min_compute = 0.10      # A ; R features computed only above this
@@ -106,7 +116,8 @@ open_circuit = false
 intermittent = false
 phone_current_a = 1.2     # simulated phone charge current
 phone_plug_s = 3.0
-phone_taper_s = 60.0      # battery fills -> current tapers -> 0 (= charged)
+phone_taper_s = 60.0      # battery fills -> current tapers to phone_charged_current_a
+phone_charged_current_a = 0.03 # A; simulated full-phone maintenance current (0.0xx A)
 
 [paths]
 data_dir = "data"

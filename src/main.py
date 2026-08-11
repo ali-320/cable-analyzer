@@ -13,10 +13,10 @@ operator changes CH224K SEL straps by hand and confirms the measured voltage
 at each step; no CH224K GPIO/PWR_OK pins are used.
 
 The manual setup now places the INA219 inline between CH224K VBUS and the
-phone. Manual mode uses the 5 V phone-charging readings for quality analysis;
-9 V and 12 V are compatibility checks only. If a higher-voltage step has no
-current, it is excluded from quality metrics and the operator is asked to
-return to 5 V to verify that charging resumes.
+phone. Manual mode first checks voltage support during IDLE windows, then
+allocates the measurement budget across supported 5 V, 9 V, and 12 V ranges.
+Unsupported ranges are excluded; if 5 V is unsupported, the highest supported
+range is used as the quality reference and reported explicitly.
 """
 from __future__ import annotations
 
@@ -57,9 +57,30 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def validate_current_bands(cfg: dict) -> None:
+    """Reject ambiguous current bands before a probe or charge run starts."""
+    s = cfg.get("session", {})
+    no_phone = float(s.get("i_no_phone_max", 0.010))
+    full_min = float(s.get("i_fully_charged_min", no_phone))
+    full_max = float(s.get("i_fully_charged_max", 0.10))
+    charge_start = float(s.get("i_charge_start", full_max))
+    if not (
+        0.0 <= no_phone
+        and full_min == no_phone
+        and full_max == charge_start
+        and full_min < full_max
+    ):
+        raise ValueError(
+            "session current bands must be contiguous and satisfy "
+            "0 <= i_no_phone_max == i_fully_charged_min < "
+            "i_fully_charged_max == i_charge_start"
+        )
+
+
 def load_config(path: str, simulate: bool, demo: bool, manual: bool = False) -> dict:
     with open(path, "rb") as fh:
         cfg = tomllib.load(fh)
+    validate_current_bands(cfg)
     if simulate or demo:
         cfg["hardware"]["simulate"] = True
         # the simulator bakes its own fixture resistance into V_load; keep the
@@ -68,6 +89,10 @@ def load_config(path: str, simulate: bool, demo: bool, manual: bool = False) -> 
         cfg["measurement"]["r_fixture_ohm"] = sim_fixture
     if not isinstance(cfg.get("ch224k"), dict):
         cfg["ch224k"] = {}
+    # The controller deliberately keeps simulation's automatic behavior by
+    # default. This explicit marker lets ``--manual --simulate`` exercise the
+    # same adaptive manual workflow as the real temporary wiring.
+    cfg["_manual_requested"] = bool(manual)
     if manual:
         cfg["ch224k"]["control_mode"] = "manual"
     return cfg
@@ -140,10 +165,208 @@ def _manual_voltage_confirmation(target_v: float) -> None:
         raise RuntimeError(f"manual voltage {target_v:g} V was not confirmed; stopped safely")
 
 
+def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
+    """Run the inline-phone manual probe with adaptive voltage allocation."""
+    pr = cfg.get("probe", {})
+    configured = [int(v) for v in pr.get("voltages", [5, 9, 12])]
+    voltages = [v for v in (5, 9, 12) if v in configured]
+    if not voltages:
+        voltages = [5, 9, 12]
+
+    rate = float(cfg.get("hardware", {}).get("sample_rate_hz", 25.0))
+    simulate = bool(cfg.get("hardware", {}).get("simulate", False) or getattr(reader, "simulate", False))
+    ch_cfg = cfg.get("ch224k", {})
+    meas = cfg.get("measurement", {})
+    session_cfg = cfg.get("session", {})
+    verify_tol = float(ch_cfg.get("verify_tolerance", 0.05))
+    manual_verify_tol_v = float(ch_cfg.get("manual_verify_tolerance_v", 1.0))
+    manual_verify_min_step_v = float(ch_cfg.get("manual_verify_min_step_v", 0.5))
+    i_start = float(session_cfg.get("i_charge_start", 0.10))
+
+    support_n = max(1, int(pr.get("manual_support_readings", round(rate * 2.0))))
+    total_n = max(1, int(pr.get("manual_total_readings", 3000)))
+    min_measure_n = max(1, int(pr.get("manual_min_measurement_readings", 5)))
+    r_fixture = float(meas.get("r_fixture_ohm", 0.0))
+    session_samples: list[Sample] = []
+    manual_readings: list[dict] = []
+    support_flags: dict[str, bool] = {}
+    support_observations: dict[str, str] = {}
+    supported: list[int] = []
+    voltage_features: dict[str, dict] = {}
+    mismatches: list[int] = []
+    rail_mismatch_voltages: list[int] = []
+    last_verified_v = 5.0
+    current_voltage: int | None = None
+
+    def verify_rail(target_v: int, require_step: bool = True) -> bool:
+        nonlocal last_verified_v
+        v_check, _, _, ok = reader.read_sample(time.monotonic())
+        if not ok or math.isnan(v_check) or v_check < 1.0:
+            return False
+        if target_v == 5:
+            verified = abs(v_check - target_v) <= verify_tol * target_v
+        else:
+            verified = abs(v_check - target_v) <= manual_verify_tol_v
+            if require_step:
+                verified = verified and v_check >= last_verified_v + manual_verify_min_step_v
+        if verified:
+            last_verified_v = float(target_v)
+        return verified
+
+    def select_voltage(target_v: int, require_step: bool = True) -> bool:
+        nonlocal current_voltage
+        _manual_voltage_confirmation(float(target_v))
+        if not ch224k.set_voltage(float(target_v)):
+            return False
+        current_voltage = target_v
+        return verify_rail(target_v, require_step=require_step)
+
+    def collect(count: int, state: str) -> list[Sample]:
+        duration = max(count, 1) / max(rate, 1e-6)
+        samples = Sampler(reader, rate, simulate).run(duration, state=state)
+        session_samples.extend(samples)
+        return samples
+
+    results: dict = {
+        "steps": [],
+        "pd_blocked": [],
+        "manual_voltage_mode": True,
+        "measurement_note": (
+            "Support flags are determined during IDLE windows. Measurements are "
+            "allocated across supported voltages; unsupported ranges are excluded."
+        ),
+        "r_fixture": r_fixture,
+        "support_flags": {},
+        "support_observations": support_observations,
+        "manual_readings": manual_readings,
+        "unsupported_voltages": [],
+        "recovery_checks": [],
+        "voltage_features": voltage_features,
+        "measurement_budget_readings": total_n,
+        "support_check_readings": support_n,
+    }
+
+    for v in voltages:
+        record = {"v_target": v, "support_check_state": "IDLE"}
+        if not select_voltage(v):
+            support_flags[str(v)] = False
+            support_observations[str(v)] = "rail_not_verified"
+            mismatches.append(v)
+            rail_mismatch_voltages.append(v)
+            record.update({"supports_voltage": False, "support_reason": "rail_not_verified"})
+            manual_readings.append(record)
+            continue
+
+        check_samples = collect(support_n, state="IDLE")
+        valid = [s for s in check_samples if s.valid]
+        active = [s for s in valid if s.current >= i_start]
+        active_fraction = len(active) / len(valid) if valid else 0.0
+        supports = bool(valid) and active_fraction >= 0.5
+        support_flags[str(v)] = supports
+        support_observations[str(v)] = "current_observed" if supports else "no_current_observed"
+        record.update({
+            "supports_voltage": supports,
+            "support_reason": "charging_current_in_IDLE" if supports else "no_current_in_IDLE",
+            "support_i_mean": round(sum(s.current for s in valid) / len(valid), 4) if valid else 0.0,
+            "support_active_fraction": round(active_fraction, 3),
+            "support_n_valid": len(valid),
+        })
+        manual_readings.append(record)
+        if supports:
+            supported.append(v)
+        else:
+            results["unsupported_voltages"].append(v)
+            print(f"  No charging current detected in the IDLE check at {v:g} V; support flag = False.")
+
+    results["support_flags"] = support_flags
+
+    if supported:
+        base, remainder = divmod(total_n, len(supported))
+        allocations = {
+            v: max(min_measure_n, base + (1 if index < remainder else 0))
+            for index, v in enumerate(supported)
+        }
+        results["measurement_allocations"] = {str(v): n for v, n in allocations.items()}
+
+        for v in supported:
+            if not select_voltage(v, require_step=False):
+                support_flags[str(v)] = False
+                support_observations[str(v)] = "measurement_rail_not_verified"
+                mismatches.append(v)
+                rail_mismatch_voltages.append(v)
+                continue
+            count = allocations[v]
+            samples = collect(count, state="PROBE")
+            valid = [s for s in samples if s.valid]
+            i_mean = sum(s.current for s in valid) / len(valid) if valid else 0.0
+            record = next(r for r in manual_readings if r["v_target"] == v)
+            record.update({
+                "measurement_n": len(samples),
+                "measurement_n_valid": len(valid),
+                "measurement_i_mean": round(i_mean, 4),
+                "measurement_quality_dataset": True,
+            })
+            feat = compute_features(
+                samples,
+                v_target=float(v),
+                r_fixture=r_fixture,
+                length_m=meas.get("length_m"),
+                i_min=float(meas.get("i_min_compute", 0.10)),
+                i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+                i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+            )
+            if feat is not None:
+                voltage_features[str(v)] = feat
+            else:
+                record["measurement_quality_dataset"] = False
+                record["support_reason"] = "current_not_sustained_during_measurement"
+
+    results["support_flags"] = support_flags
+    results["support_observations"] = support_observations
+    results["no_current_all_voltages"] = not voltage_features and all(
+        support_flags.get(str(v)) is False
+        and support_observations.get(str(v)) == "no_current_observed"
+        for v in (5, 9, 12)
+    )
+    if results["no_current_all_voltages"]:
+        print("  No current is flowing in the 5 V, 9 V, or 12 V ranges.")
+
+    if mismatches:
+        results["manual_voltage_mismatch"] = sorted(set(mismatches))
+    if rail_mismatch_voltages:
+        results["rail_mismatch_voltages"] = sorted(set(rail_mismatch_voltages))
+
+    if voltage_features:
+        # Preserve the requested order for fallback grading: 5 V first, then
+        # 9 V, then 12 V. This avoids preferring 12 V merely because it is the
+        # highest rail and keeps the fallback closest to the normal 5 V path.
+        reference_v = 5 if "5" in voltage_features else min(int(v) for v in voltage_features)
+        results["quality_reference_voltage"] = reference_v
+        results["quality_features"] = voltage_features[str(reference_v)]
+        if reference_v != 5:
+            results["quality_reference_note"] = (
+                "5 V unsupported; grade uses a supported higher-voltage reference "
+                "and should be compared with same-voltage calibration."
+            )
+
+    # Never silently leave the phone on a higher rail. If the operator cannot
+    # confirm the safe reset, abort the session visibly so the hardware can be
+    # disconnected and checked rather than producing a misleading verdict.
+    if current_voltage != 5:
+        _manual_voltage_confirmation(5.0)
+    if not ch224k.set_voltage(5.0):
+        raise RuntimeError("could not restore CH224K to safe 5 V; disconnect the phone and inspect the rig")
+    load.set_current(0.0, enable=False)
+    load.phone_switch(True)
+    results["_samples"] = session_samples
+    return results
+
 def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
     """DEVELOPMENT_PLAN.md §4.2 — automatic or manually confirmed voltage steps."""
     pr = cfg.get("probe", {})
-    manual = bool(getattr(ch224k, "manual", False))
+    manual = bool(getattr(ch224k, "manual", False) or cfg.get("_manual_requested", False))
+    if manual:
+        return _run_manual_probe_adaptive(cfg, reader, ch224k, load)
     configured_voltages = [int(v) for v in pr.get("voltages", [5, 9, 12])]
     if manual:
         # Manual phone testing always starts at 5 V, then checks higher PDOs.
@@ -322,6 +545,7 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
                 hf = compute_features(
                     heat_samples, v_target=float(v), r_fixture=0.0,
                     i_min=float(meas.get("i_min_compute", 0.1)),
+                    i_no_phone=float(cfg.get("session", {}).get("i_no_phone_max", 0.01)),
                 )
                 if hf is not None:
                     results["dR_dt_mOhm_per_min"] = round(hf["dR_dt_mOhm_per_min"], 2)
@@ -344,6 +568,7 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
             length_m=meas.get("length_m"),
             i_min=float(meas.get("i_min_compute", 0.10)),
             i_no_load=float(cfg.get("session", {}).get("i_no_load", 0.05)),
+            i_no_phone=float(cfg.get("session", {}).get("i_no_phone_max", 0.01)),
         )
         results["quality_features"] = quality
     if manual:
@@ -390,6 +615,7 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
                 plug_s=float(sim_cfg.get("phone_plug_s", 3.0)),
                 current_a=float(sim_cfg.get("phone_current_a", 1.2)),
                 taper_s=float(sim_cfg.get("phone_taper_s", 60.0)),
+                charged_current_a=float(sim_cfg.get("phone_charged_current_a", 0.03)),
             )
 
     sampler = Sampler(reader, rate, simulate)
@@ -408,6 +634,7 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
         samples, v_target=v_target, r_fixture=r_fixture, length_m=length,
         i_min=float(meas.get("i_min_compute", 0.1)),
         i_no_load=float(cfg.get("session", {}).get("i_no_load", 0.05)),
+        i_no_phone=float(cfg.get("session", {}).get("i_no_phone_max", 0.01)),
     )
     meta = SessionMeta(
         mode="charge",

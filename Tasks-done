@@ -1,0 +1,17 @@
+# 10th Aug
+1. Charged state introduced.
+2. The code now flags the voltages that are not spported for a device, and divides the number of readings to be taken 
+among the available voltages.
+
+# 11th Aug
+1. Updated leakage and interruption calculations so the low-current maintenance draw of a fully charged mobile is not confused with board leakage or a no-mobile condition.
+2. Updated the feature reference so leakage, interruption, and idle-current descriptions use the new no-mobile current threshold.
+3. Updated the idle-current output description to represent board/fixture leakage when no mobile is detected.
+4. Corrected the example terminal output so the very-low-current sample is shown as a no-mobile state.
+5. The IDLE mode is used to check that which voltages are supported and the flags are marked correspondingly. It runs for 2 secs.
+After that the PROBE mode is started in which the actual readings are taken.
+6. The code runs for 2 hours by defualt which is given by the:
+`charge_timeout_s = 7200` value in the config.toml. It says that the code runs for 7200 secongs.
+We can change this by sepcifying the duration in the python command.
+7. The NO_PHONE, CHARGING, and CHARGED states now have the following current ranges:
+0.00xx, 0.xx, 0.0xx, respectively.

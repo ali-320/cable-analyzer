@@ -163,13 +163,16 @@ Run:
 ```bash
 python -m src.main --manual --mode probe --length 1.0
 ```
-Keep the phone connected. The program samples 5 V for `manual_5v_hold_s`
-(default 60 seconds), then asks you to select 9 V and 12 V manually. The 9/12 V
-samples are compatibility checks only. If current is below
-`session.i_charge_start`, the program records that the phone did not charge at
-that voltage, asks you to return to 5 V, and checks whether charging resumes.
-Only the 5 V samples (including successful recovery samples) are used for the
-quality grade.
+Keep the phone connected. The program asks you to select 5 V, 9 V, and 12 V
+manually. For each voltage it first collects an IDLE support-check window
+(default 50 readings) and stores a `support_flags` entry. It then divides the
+measurement budget (default 3000 readings) equally among the voltages whose
+flag is true. Unsupported ranges are excluded; if 5 V is unsupported, the
+lowest supported higher voltage becomes the quality reference and the verdict is
+marked `FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
+separately and does not prove that the device rejects that voltage. If no current is observed in all three
+IDLE checks, the terminal reports `NO_CURRENT_ALL_VOLTAGES` and no cable grade
+is produced. All IDLE and PROBE readings remain in the session CSV.
 
 Verify every manual voltage with a DMM. The software cannot isolate the phone
 or protect it from an incorrect SEL setting because CH224K GPIO is not wired.
@@ -193,7 +196,7 @@ Expected output shape (simulated demo; real numbers differ):
   !! PD negotiation FAILED at: [9, 12] V  (cable blocks CC/PD signaling) )
   heating dR/dt over 60 s hold: +95.92 mΩ/min
 
-  t=   1.0s  V= 5.001 V  I= 0.005 A  P=  0.02 W  state=IDLE
+  t=   1.0s  V= 5.001 V  I= 0.005 A  P=  0.02 W  state=NO_PHONE
   t=  10.0s  V= 4.298 V  I= 1.189 A  P=  5.11 W  state=CHARGING
   ... (streams until I -> 0 for the debounce period, then) ...
 
@@ -241,7 +244,7 @@ OK
 ---
 
 ## 5. Safety reminders (from DEVELOPMENT_PLAN.md §10)
-- The current phone-inline setup measures phone current through the INA219, but it has no CH224K GPIO or phone-isolation protection. It can test 5 V charging quality; 9/12 V are compatibility checks only.
+- The current phone-inline setup measures phone current through the INA219, but it has no CH224K GPIO or phone-isolation protection. The manual probe checks support at 5/9/12 V, allocates readings across supported ranges, and uses a non-5 V fallback grade only with an explicit limitation/tag.
 - Never rely on the software prompt as protection when changing to 9/12 V; verify with a DMM and confirm the phone is rated for the selected voltage.
 - The current manual phone-inline test intentionally uses the phone as the load; begin at 5 V and stop immediately if voltage/current is abnormal.
 - The protected GPIO workflow still requires multi-voltage probing with the phone isolated (Q1 off).

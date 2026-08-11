@@ -68,6 +68,7 @@ def compute_features(
     length_m: float | None = None,
     i_min: float = 0.10,
     i_no_load: float = 0.05,
+    i_no_phone: float = 0.01,
     min_busy_samples: int = 5,
     steady_frac: float = 0.5,
 ) -> dict | None:
@@ -132,9 +133,9 @@ def compute_features(
         dips = 0
         idx = 0
         while idx < total:
-            if charging[idx].current < i_no_load:
+            if charging[idx].current < i_no_phone:
                 start = idx
-                while idx < total and charging[idx].current < i_no_load:
+                while idx < total and charging[idx].current < i_no_phone:
                     idx += 1
                 if idx < total:  # run ended with a recovery -> intermittent dip
                     dips += idx - start
@@ -142,7 +143,7 @@ def compute_features(
                 idx += 1
         inter_frac = dips / total if total else 0.0
     elif valid:
-        inter_frac = mean([1.0 if s.current < i_no_load else 0.0 for s in valid])
+        inter_frac = mean([1.0 if s.current < i_no_phone else 0.0 for s in valid])
 
     # spikes: |dI/dt| or |dV/dt| exceedance over a ~0.2 s window (averages
     # out ADC noise; a genuine arc is a real multi-mV jump, not 1-sample noise)
@@ -154,9 +155,16 @@ def compute_features(
         if abs(b.current - a.current) / dt > 2.0 or abs(b.voltage - a.voltage) / dt > 0.2:
             spikes += 1
 
-    # true idle: state==IDLE AND current below i_no_load (excludes the
-    # charging-debounce ramp where current is already flowing)
-    idle = [s for s in samples if s.valid and s.state == "IDLE" and s.current < i_no_load]
+    # Leakage/no-phone current is distinct from a fully charged phone's
+    # 0.0xx A maintenance current. Prefer explicit NO_PHONE samples; the
+    # numeric fallback keeps probe/manual datasets compatible.
+    idle = [
+        s for s in samples
+        if s.valid and (
+            s.state == "NO_PHONE"
+            or (s.state == "IDLE" and s.current < i_no_phone)
+        )
+    ]
     idle_i = mean([s.current for s in idle]) if idle else None
 
     energy_j = 0.0

@@ -134,10 +134,10 @@ class SimulatedLoadController:
 def phone_charge_curve(
     t: float,
     plug_s: float = 3.0,
-    ramp_s: float = 6.0,
-    current_a: float = 1.2,
-    taper_s: float = 60.0,
-    noise_a: float = 0.02,
+    ramp_s: float = 6.0,        current_a: float = 1.2,
+        taper_s: float = 60.0,
+        charged_current_a: float = 0.03,
+        noise_a: float = 0.02,
     seed: int = 7,
 ) -> float:
     """Simulated phone charging current vs elapsed time (A).
@@ -154,4 +154,6 @@ def phone_charge_curve(
     if t2 < taper_s:
         return current_a + rng.gauss(0.0, noise_a)
     frac = min(1.0, (t2 - taper_s) / max(taper_s * 0.25, 1e-6))
-    return max(0.0, current_a * (1.0 - frac))
+    # A full phone still draws a small maintenance current (0.0xx A),
+    # unlike an unplugged phone where only board leakage (0.00xx A) remains.
+    return charged_current_a + (current_a - charged_current_a) * (1.0 - frac)

@@ -65,6 +65,14 @@ def evaluate(
         return base
 
     # --- 2. no/insufficient charging data ---
+    probe = meta.get("probe") or {}
+    if features is None and probe.get("no_current_all_voltages"):
+        base.update(
+            verdict="NO_CURRENT_ALL_VOLTAGES",
+            tags=["NO_CURRENT_ALL_VOLTAGES"],
+            evidence=["no charging current measured during IDLE checks at 5 V, 9 V, or 12 V"],
+        )
+        return base
     if features is None:
         if not meta.get("v_present"):
             base.update(
@@ -137,7 +145,6 @@ def evaluate(
     if grade in ("D", "F"):
         tags.append("HIGH_LOSS")
 
-    probe = meta.get("probe") or {}
     pd_blocked = probe.get("pd_blocked") or []
     if pd_blocked:
         tags.append("PD_BLOCKED")
@@ -146,6 +153,27 @@ def evaluate(
     if manual_mismatch:
         tags.append("VOLTAGE_MISMATCH")
         evidence.append(f"manual voltage did not match INA219 reading at: {manual_mismatch} V")
+    rail_mismatch = probe.get("rail_mismatch_voltages") or []
+    if rail_mismatch:
+        tags.append("RAIL_VERIFICATION_FAILED")
+        evidence.append(f"support could not be determined because rail verification failed at: {rail_mismatch} V")
+
+    support_flags = probe.get("support_flags") or {}
+    reference_v = probe.get("quality_reference_voltage")
+    if reference_v and int(reference_v) != 5:
+        tags.append("FALLBACK_VOLTAGE_REFERENCE")
+        base["limitations"].append(
+            "quality reference used a non-5 V range; compare with same-voltage calibration before treating the grade as universal"
+        )
+        confidence_penalty = 0.85
+        evidence.append(
+            f"5 V support flag was false; quality reference used {int(reference_v)} V instead"
+        )
+    else:
+        confidence_penalty = 1.0
+    unsupported = [v for v, supported in support_flags.items() if supported is False]
+    if unsupported:
+        evidence.append(f"device voltage support flags false at: {unsupported} V")
 
     idle_i = features.get("idle_I")
     if idle_i is not None and idle_i * 1000.0 > leak_ma:
@@ -162,7 +190,7 @@ def evaluate(
     if features.get("r_dvdi") is not None and r_mean > 0:
         agree = 1.0 - min(1.0, abs(r_mean - features["r_dvdi"]) / max(r_mean, 0.02))
         conf = 0.6 * conf + 0.4 * max(0.0, agree)
-    confidence = max(0.0, min(1.0, conf))
+    confidence = max(0.0, min(1.0, conf * confidence_penalty))
 
     base.update(
         verdict=f"Grade {grade}: {label}",

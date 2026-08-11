@@ -1,0 +1,63 @@
+RADWI Cable Analyzer — Changes Record
+
+Requested changes
+-----------------
+The requested feature was to use the observed INA219 current ranges to improve state detection:
+
+- Active mobile charging normally appears in the 0.xxx A range.
+- A fully charged mobile normally continues drawing a smaller 0.0xx A current.
+- When no mobile is connected, only a very small 0.00xx A leakage current is present.
+- These ranges should be configurable in config.toml.
+- The corresponding state logic, calculations, simulation behavior, tests, and documentation should be updated.
+- The implementation must distinguish a fully charged mobile from an absent mobile and must not treat the no-mobile leakage range as evidence that charging completed.
+
+Changed files and abstract logic
+--------------------------------
+
+1. cable-analyzer/config.toml
+   Lines: 66–72, 79, and 119–120.
+   Abstract logic: Added configurable current-band limits for no-mobile leakage and low-current/full-mobile behavior, clarified the active-charging boundary, and added the simulated maintenance current for a fully charged mobile.
+
+2. cable-analyzer/src/main.py
+   Lines: 60–83, 316, 548, 571, 618, and 637.
+   Abstract logic: Validates that the configured current bands are contiguous before a run starts, and passes the configured no-mobile threshold into feature calculations and the simulator’s full-mobile behavior.
+
+3. cable-analyzer/src/telemetry/session.py
+   Lines: 5–10, 23, 39–79, and 105–176.
+   Abstract logic: Introduced the no-mobile state, classifies samples using the three current bands, preserves charging debounce behavior, identifies a fully charged mobile only in the connected low-current band, and avoids labeling a disconnected mobile as fully charged.
+
+4. cable-analyzer/src/features/metrics.py
+   Lines: 64–72, 124–146, and 158–166.
+   Abstract logic: Updated leakage and interruption calculations so the low-current maintenance draw of a fully charged mobile is not confused with board leakage or a no-mobile condition.
+
+5. cable-analyzer/src/hardware/sim.py
+   Lines: 125–159.
+   Abstract logic: Updated simulated phone behavior so the current tapers to a configurable low maintenance level rather than becoming indistinguishable from no-mobile leakage.
+
+6. cable-analyzer/tests/test_session.py
+   Lines: 7, 11–16, 34–45, 51–58, 94–119, and 121–132.
+   Abstract logic: Added coverage for no-mobile detection, connected low-current detection, charging completion using the correct band, disconnection after charging, exact current boundaries, and invalid band configurations.
+
+7. cable-analyzer/tests/test_metrics.py
+   Lines: 6–7 and 64–94.
+   Abstract logic: Added coverage confirming that fully charged mobile current is not reported as leakage and that it is not incorrectly counted as an interruption, while preserving recovered-dip detection.
+
+8. cable-analyzer/states.md
+   Lines: 5–48.
+   Abstract logic: Reworked the state reference to describe the three current bands, the no-mobile state, the fully charged transition, configuration relationships, and the distinction between disconnection and completed charging.
+
+9. cable-analyzer/features.md
+   Lines: 35, 213–218, 243–248, and 335.
+   Abstract logic: Updated the feature reference so leakage, interruption, and idle-current descriptions use the new no-mobile current threshold.
+
+10. cable-analyzer/output.md
+    Line: 58.
+    Abstract logic: Updated the idle-current output description to represent board/fixture leakage when no mobile is detected.
+
+11. cable-analyzer/dependencies.md
+    Line: 199.
+    Abstract logic:  
+
+Validation
+----------
+The configuration was parsed successfully, all modified Python files compiled successfully, and the complete test suite passed with 58 tests and no failures or errors.

@@ -52,6 +52,22 @@ class TestGrades(unittest.TestCase):
         v = evaluate(None, {"session_id": "T4", "v_present": True, "phone_expected": False}, CFG)
         self.assertEqual(v["verdict"], "NO_CHARGE")
 
+    def test_no_current_all_voltages_verdict(self):
+        v = evaluate(
+            None,
+            {
+                "session_id": "T5",
+                "v_present": True,
+                "probe": {
+                    "no_current_all_voltages": True,
+                    "support_flags": {"5": False, "9": False, "12": False},
+                },
+            },
+            CFG,
+        )
+        self.assertEqual(v["verdict"], "NO_CURRENT_ALL_VOLTAGES")
+        self.assertIn("NO_CURRENT_ALL_VOLTAGES", v["tags"])
+
     def test_fault_override(self):
         v = evaluate(base_features(), dict(META, fault_reason="short_condition"), CFG)
         self.assertEqual(v["grade"], "F")
@@ -79,6 +95,17 @@ class TestDefectTags(unittest.TestCase):
         v = evaluate(base_features(), meta, CFG)
         self.assertIn("PD_BLOCKED", v["tags"])
         self.assertTrue(any("PD negotiation failed" in e for e in v["evidence"]))
+
+    def test_fallback_voltage_reference_tag(self):
+        meta = dict(
+            META,
+            probe={
+                "quality_reference_voltage": 9,
+                "support_flags": {"5": False, "9": True, "12": False},
+            },
+        )
+        v = evaluate(base_features(), meta, CFG)
+        self.assertIn("FALLBACK_VOLTAGE_REFERENCE", v["tags"])
 
     def test_leaky_tag(self):
         v = evaluate(base_features(idle_i=0.05), dict(META), CFG)  # 50 mA idle

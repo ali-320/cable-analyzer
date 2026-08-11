@@ -1,0 +1,27 @@
+python -m src.main --manual --mode probe --length 2.0
+1. When I run the code, it first asks for 5V, even though self-check shows that the reading is 5V and the current is flowing, but still it immediately terminates and doesn't take any readings at 5V.
+When the code ended it showed me that the railed verification failed at the initial 5V even though current was flowing.
+
+2. During calibration why is the current taken at 0.5, 1, 1.5, 2 Ampere. Even though we cannot communicate with the current to the charger.
+During calibration I believe that we should just take some sufficient readings to calculate the resistance of the board, without specifying the current for now.
+If there is a way to communicate with the chager to supply specific current and it help in calculating the resistance,
+then tell me and we start working on it later, but this issue needs to be fixed for now. 
+
+3. Why does when I run the system in probe mode, all the states become probe, in the resulting .csv file.
+This shouldn't be the case the code should choose from the pre-defined states and 
+
+4. The IDLE state and the CHARGED state, both work on the lower current band, we can remove one of them.
+The only difference is that the the phone first stays in IDLE and can only go to CHARGED after CHARGING state.
+
+5. Tell me that what does the phone_taper_s represents in the config.toml
+
+6. In the probe mode, the IDLE state represnts that the phone's voltags are being tested and then the PROBE state is given
+to show that the cable is now being analyzed. This should not be the case. The states should be 
+CHARGING, CHARGED, NO-PHONE, and IDLE.
+The IDLE checking state should be replaced by a state name checking that gives the value of the flags.
+
+Improvement
+2. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
+
+3. Change debounce_end_s from 60 to 30. It represents the time for which the device stays in charged state,
+and then the verdict is given that the phone is charged.

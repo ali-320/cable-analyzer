@@ -55,7 +55,7 @@ E_wh   = integral(P_measured × dt) / 3600
 | `dR_dt_mOhm_per_min` | Resistance increase or decrease over time; used as a self-heating indicator. | Calculated resistance values and timestamps using linear regression. |
 | `interruption_frac` | Fraction of charging samples belonging to current interruptions that later recover. | Current values, `i_no_load`, and sample states. |
 | `spike_count` | Number of sudden voltage or current changes. | Consecutive valid samples, voltage/current differences, and timestamps. |
-| `idle_I` | Average current while the system is idle and below the no-load threshold. | Valid `IDLE` samples and `i_no_load`. |
+| `idle_I` | Average board/fixture leakage current when no phone is detected. | Valid `NO_PHONE` samples and `i_no_phone_max`. |
 
 ## Data-quality and session metadata
 

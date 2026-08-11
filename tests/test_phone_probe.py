@@ -61,7 +61,7 @@ class TestPhoneInlineProbe(unittest.TestCase):
         ch224k = CH224KController(PinMap(), cfg, simulate=False, sim_state=state)
         load = LoadController(PinMap(), cfg, simulate=False, sim_state=state)
         try:
-            with patch("builtins.input", side_effect=["5", "9", "12", "5"]):
+            with patch("builtins.input", side_effect=["5", "9", "12", "5", "9", "12", "5"]):
                 def step_v(target_v: float) -> bool:
                     # operator manually changed the SEL straps: simulate the
                     # rail stepping up but sagging below target (lossy cable)
@@ -73,6 +73,8 @@ class TestPhoneInlineProbe(unittest.TestCase):
                     probe = run_probe(cfg, reader, ch224k, load, state)
             self.assertEqual(probe.get("manual_voltage_mismatch"), None)
             self.assertEqual(probe.get("unsupported_voltages"), [])
+            self.assertEqual(probe.get("support_flags"), {"5": True, "9": True, "12": True})
+            self.assertEqual(probe.get("measurement_allocations"), {"5": 1000, "9": 1000, "12": 1000})
             self.assertEqual(len(probe.get("manual_readings", [])), 3)
         finally:
             ch224k.close()
@@ -80,15 +82,14 @@ class TestPhoneInlineProbe(unittest.TestCase):
             reader.shutdown()
 
     def test_manual_probe_recovers_when_rail_did_not_step_up(self):
-        """A 12 V step that stays at 5 V (phone rejected the PDO) triggers the
-        5 V recovery check and is recorded as unsupported."""
+        """A 12 V step that stays at 5 V is recorded as a rail mismatch."""
         state = SimState(current=0.5, v_target=5.0)
         cfg = _cfg()
         reader = INA219Reader(cfg, simulate=True, sim_state=state)
         ch224k = CH224KController(PinMap(), cfg, simulate=False, sim_state=state)
         load = LoadController(PinMap(), cfg, simulate=False, sim_state=state)
         try:
-            with patch("builtins.input", side_effect=["5", "9", "12", "5", "5"]):
+            with patch("builtins.input", side_effect=["5", "9", "12", "5", "9", "5"]):
                 def step_v(target_v: float) -> bool:
                     # 5 and 9 rise normally; the phone rejects 12 V, so the
                     # rail stays where the operator actually left it (5 V)
@@ -99,7 +100,59 @@ class TestPhoneInlineProbe(unittest.TestCase):
                 with patch.object(ch224k, "set_voltage", side_effect=step_v, return_value=True):
                     probe = run_probe(cfg, reader, ch224k, load, state)
             self.assertIn(12, probe.get("manual_voltage_mismatch", []))
-            self.assertGreaterEqual(len(probe.get("recovery_checks", [])), 1)
+            self.assertEqual(probe.get("support_flags", {}).get("12"), False)
+            self.assertEqual(probe.get("measurement_allocations"), {"5": 1500, "9": 1500})
+            self.assertEqual(probe.get("recovery_checks"), [])
+        finally:
+            ch224k.close()
+            load.close()
+            reader.shutdown()
+
+    def test_5v_unsupported_but_9v_and_12v_supported(self):
+        """A device may draw at higher PDOs even when it does not draw at 5 V."""
+        state = SimState(current=0.5, v_target=5.0)
+        cfg = _cfg()
+        cfg["_manual_requested"] = True
+        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 12})
+        reader = INA219Reader(cfg, simulate=True, sim_state=state)
+        ch224k = CH224KController(PinMap(), cfg, simulate=True, sim_state=state)
+        load = LoadController(PinMap(), cfg, simulate=True, sim_state=state)
+        try:
+            with patch("builtins.input", side_effect=["5", "9", "12", "9", "12", "5"]):
+                def step_v(target_v: float) -> bool:
+                    state.v_target = {5: 5.0, 9: 9.0, 12: 12.0}[int(target_v)]
+                    state.current = 0.0 if int(target_v) == 5 else 0.5
+                    return True
+                with patch.object(ch224k, "set_voltage", side_effect=step_v, return_value=True):
+                    probe = run_probe(cfg, reader, ch224k, load, state)
+            self.assertEqual(probe["support_flags"], {"5": False, "9": True, "12": True})
+            self.assertEqual(probe["measurement_allocations"], {"9": 6, "12": 6})
+            self.assertEqual(probe["quality_reference_voltage"], 9)
+            self.assertIsNotNone(probe.get("quality_features"))
+        finally:
+            ch224k.close()
+            load.close()
+            reader.shutdown()
+
+    def test_all_voltage_ranges_without_current(self):
+        state = SimState(current=0.0, v_target=5.0)
+        cfg = _cfg()
+        cfg["_manual_requested"] = True
+        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 12})
+        reader = INA219Reader(cfg, simulate=True, sim_state=state)
+        ch224k = CH224KController(PinMap(), cfg, simulate=True, sim_state=state)
+        load = LoadController(PinMap(), cfg, simulate=True, sim_state=state)
+        try:
+            with patch("builtins.input", side_effect=["5", "9", "12", "5"]):
+                def step_v(target_v: float) -> bool:
+                    state.v_target = float(target_v)
+                    state.current = 0.0
+                    return True
+                with patch.object(ch224k, "set_voltage", side_effect=step_v, return_value=True):
+                    probe = run_probe(cfg, reader, ch224k, load, state)
+            self.assertTrue(probe["no_current_all_voltages"])
+            self.assertEqual(probe["support_flags"], {"5": False, "9": False, "12": False})
+            self.assertNotIn("quality_features", probe)
         finally:
             ch224k.close()
             load.close()

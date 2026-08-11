@@ -4,10 +4,13 @@ import unittest
 from tests.helpers import make_samples
 
 from src.telemetry.models import Sample
-from src.telemetry.session import CHARGED, CHARGING, FAULT, IDLE, NO_SOURCE, OPEN, SessionTracker
+from src.telemetry.session import CHARGED, CHARGING, FAULT, IDLE, NO_PHONE, NO_SOURCE, OPEN, SessionTracker
 
 CFG = {
     "session": {
+        "i_no_phone_max": 0.010,
+        "i_fully_charged_min": 0.010,
+        "i_fully_charged_max": 0.10,
         "i_no_load": 0.05,
         "i_charge_start": 0.10,
         "debounce_start_s": 5.0,
@@ -31,10 +34,15 @@ class TestStateMachine(unittest.TestCase):
         feed(tr, samples)
         self.assertEqual(tr.state, NO_SOURCE)
 
-    def test_idle_when_power_present_no_load(self):
+    def test_no_phone_when_only_board_leakage_is_present(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        feed(tr, make_samples(n=10, current=0.0))
-        self.assertEqual(tr.state, IDLE)  # V~5 V present, I=0 -> not charging
+        feed(tr, make_samples(n=10, current=0.005))
+        self.assertEqual(tr.state, NO_PHONE)  # 0.00x A is the no-phone band
+
+    def test_idle_when_phone_draws_low_current(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        feed(tr, make_samples(n=10, current=0.03))
+        self.assertEqual(tr.state, IDLE)  # 0.0x A is the connected/full band
 
     def test_charging_starts_after_debounce(self):
         tr = SessionTracker(CFG, v_target=5.0)
@@ -52,7 +60,7 @@ class TestStateMachine(unittest.TestCase):
         tr = SessionTracker(CFG, v_target=5.0)
         # 10 s charging then 61 s of I~0 -> CHARGED (user rule: I=0 after readings = charged)
         samples = make_samples(n=20, current=1.0, period=0.5)  # 10 s charging
-        samples += make_samples(n=122, current=0.01, period=0.5, state="CHARGING")  # 61 s tail
+        samples += make_samples(n=122, current=0.03, period=0.5, state="CHARGING")  # 61 s full-phone tail
         feed(tr, samples)
         self.assertEqual(tr.state, CHARGED)
         self.assertTrue(tr.ever_charged)
@@ -65,11 +73,11 @@ class TestStateMachine(unittest.TestCase):
         ]
         low_start = charging[-1].t + 0.5
         low = [
-            Sample(t=low_start + k * 0.5, voltage=5.0, current=0.01, power=0.05)
+            Sample(t=low_start + k * 0.5, voltage=5.0, current=0.03, power=0.15)
             for k in range(122)
         ]
         post = [
-            Sample(t=low[-1].t + (k + 1) * 0.5, voltage=5.0, current=0.01, power=0.05)
+            Sample(t=low[-1].t + (k + 1) * 0.5, voltage=5.0, current=0.03, power=0.15)
             for k in range(20)
         ]
 
@@ -84,11 +92,42 @@ class TestStateMachine(unittest.TestCase):
 
     def test_open_candidate_when_phone_expected(self):
         tr = SessionTracker(CFG, v_target=5.0, phone_expected=True)
-        samples = make_samples(n=70, current=0.0, period=0.5)  # 35 s IDLE, no load
+        samples = make_samples(n=70, current=0.005, period=0.5)  # 35 s NO_PHONE
         feed(tr, samples)
-        self.assertEqual(tr.state, IDLE)
+        self.assertEqual(tr.state, NO_PHONE)
         self.assertTrue(tr.open_flag)
         self.assertEqual(tr.last_event, "open_candidate")
+
+    def test_charged_requires_the_low_current_phone_band(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        charging = make_samples(n=20, current=1.0, period=0.5)
+        disconnected = make_samples(n=122, current=0.005, period=0.5, state="CHARGING")
+        feed(tr, charging + disconnected)
+        self.assertEqual(tr.state, NO_PHONE)
+        self.assertFalse(tr.ever_charged)
+
+    def test_current_band_boundaries(self):
+        for current, expected in ((0.009, NO_PHONE), (0.010, IDLE), (0.099, IDLE), (0.100, IDLE)):
+            tr = SessionTracker(CFG, v_target=5.0)
+            sample = make_samples(n=1, current=current)[0]
+            tr.update(sample)
+            self.assertEqual(tr.state, expected, f"current={current}")
+        tr = SessionTracker(CFG, v_target=5.0)
+        samples = make_samples(n=12, current=0.100, period=0.5)
+        feed(tr, samples)
+        self.assertEqual(tr.state, CHARGING)
+
+    def test_invalid_current_band_configuration_is_rejected(self):
+        bad_cfg = {
+            "session": {
+                "i_no_phone_max": 0.02,
+                "i_fully_charged_min": 0.01,
+                "i_fully_charged_max": 0.10,
+                "i_charge_start": 0.10,
+            }
+        }
+        with self.assertRaises(ValueError):
+            SessionTracker(bad_cfg)
 
     def test_fault_on_short_condition(self):
         tr = SessionTracker(CFG, v_target=5.0)
