@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from src.telemetry.models import Sample
 
-# IDLE can contain active-current samples during the charging-start debounce.
-# The current threshold below is authoritative, so low-current IDLE samples
-# remain excluded while active probe samples remain usable for quality metrics.
-BUSY_STATES = {"IDLE", "CHARGING", "PROBE", "UNKNOWN", ""}
+# Normal quality samples are active charging/probe samples. CHARGED and
+# NO_PHONE are intentionally excluded from resistance calculations by current
+# threshold; VERIFICATION is filtered separately below.
+BUSY_STATES = {"CHARGING", "PROBE", "UNKNOWN", ""}
 
 
 def mean(xs) -> float:
@@ -166,13 +166,7 @@ def compute_features(
     # Leakage/no-phone current is distinct from a fully charged phone's
     # 0.0xx A maintenance current. Prefer explicit NO_PHONE samples; the
     # numeric fallback keeps probe/manual datasets compatible.
-    idle = [
-        s        for s in analysis_samples
-        if s.valid and (
-            s.state == "NO_PHONE"
-            or (s.state == "IDLE" and s.current < i_no_phone)
-        )
-    ]
+    idle = [s for s in analysis_samples if s.valid and s.state == "NO_PHONE"]
     idle_i = mean([s.current for s in idle]) if idle else None
 
     energy_j = 0.0

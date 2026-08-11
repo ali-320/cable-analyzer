@@ -113,7 +113,9 @@ class TestPhoneInlineProbe(unittest.TestCase):
         state = SimState(current=0.5, v_target=5.0)
         cfg = _cfg()
         cfg["_manual_requested"] = True
-        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 12})
+        # Each measurement window must be long enough for the new three-second
+        # state debounce before feature extraction can use its CHARGING rows.
+        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 80})
         reader = INA219Reader(cfg, simulate=True, sim_state=state)
         ch224k = CH224KController(PinMap(), cfg, simulate=True, sim_state=state)
         load = LoadController(PinMap(), cfg, simulate=True, sim_state=state)
@@ -126,7 +128,7 @@ class TestPhoneInlineProbe(unittest.TestCase):
                 with patch.object(ch224k, "set_voltage", side_effect=step_v, return_value=True):
                     probe = run_probe(cfg, reader, ch224k, load, state)
             self.assertEqual(probe["support_flags"], {"5": False, "9": True, "12": True})
-            self.assertEqual(probe["measurement_allocations"], {"9": 6, "12": 6})
+            self.assertEqual(probe["measurement_allocations"], {"9": 40, "12": 40})
             self.assertEqual(probe["quality_reference_voltage"], 9)
             self.assertIsNotNone(probe.get("quality_features"))
         finally:
@@ -138,7 +140,9 @@ class TestPhoneInlineProbe(unittest.TestCase):
         state = SimState(current=0.0, v_target=5.0)
         cfg = _cfg()
         cfg["_manual_requested"] = True
-        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 12})
+        # Each measurement window must be long enough for the new three-second
+        # state debounce before feature extraction can use its CHARGING rows.
+        cfg["probe"].update({"manual_support_readings": 5, "manual_total_readings": 80})
         reader = INA219Reader(cfg, simulate=True, sim_state=state)
         ch224k = CH224KController(PinMap(), cfg, simulate=True, sim_state=state)
         load = LoadController(PinMap(), cfg, simulate=True, sim_state=state)

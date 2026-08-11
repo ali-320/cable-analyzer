@@ -10,7 +10,7 @@ class Sample:
 
     ``t`` is seconds since the acquisition started (monotonic ordering).
     ``state`` is annotated by the :class:`SessionTracker` as samples stream
-    through it (NO_SOURCE / NO_PHONE / IDLE / CHARGING / CHARGED / FAULT), or
+    through it (NO_SOURCE / NO_PHONE / CHARGING / CHARGED / FAULT), or
     is ``VERIFICATION`` for manual voltage-support checks and ``PROBE`` for
     controlled-load probe samples.
     """

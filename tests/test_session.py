@@ -1,10 +1,18 @@
-"""Unit tests for src/telemetry/session.py (DEVELOPMENT_PLAN.md §3 state machine)."""
+"""Unit tests for the three-band debounced session state machine."""
 import unittest
 
 from tests.helpers import make_samples
 
 from src.telemetry.models import Sample
-from src.telemetry.session import CHARGED, CHARGING, FAULT, IDLE, NO_PHONE, NO_SOURCE, OPEN, SessionTracker
+from src.telemetry.session import (
+    CHARGED,
+    CHARGING,
+    FAULT,
+    NO_PHONE,
+    NO_SOURCE,
+    OPEN,
+    SessionTracker,
+)
 
 CFG = {
     "session": {
@@ -13,8 +21,9 @@ CFG = {
         "i_fully_charged_max": 0.10,
         "i_no_load": 0.05,
         "i_charge_start": 0.10,
-        "debounce_start_s": 5.0,
-        "debounce_end_s": 60.0,
+        "debounce_state_s": 3.0,
+        "debounce_start_s": 3.0,
+        "debounce_end_s": 3.0,
         "debounce_finish_s": 10.0,
         "open_timeout_s": 30.0,
     }
@@ -22,9 +31,15 @@ CFG = {
 
 
 def feed(tracker: SessionTracker, samples: list[Sample]):
-    for s in samples:
-        tracker.update(s)
+    for sample in samples:
+        tracker.update(sample)
     return tracker
+
+
+def continuous(samples: list[Sample], start: float) -> list[Sample]:
+    for index, sample in enumerate(samples):
+        sample.t = start + (index + 1) * 0.5
+    return samples
 
 
 class TestStateMachine(unittest.TestCase):
@@ -34,171 +49,128 @@ class TestStateMachine(unittest.TestCase):
         feed(tr, samples)
         self.assertEqual(tr.state, NO_SOURCE)
 
-    def test_no_phone_when_only_board_leakage_is_present(self):
+    def test_no_phone_after_three_seconds_of_leakage(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        feed(tr, make_samples(n=10, current=0.005))
-        self.assertEqual(tr.state, NO_PHONE)  # 0.00x A is the no-phone band
-
-    def test_idle_when_phone_draws_low_current(self):
-        tr = SessionTracker(CFG, v_target=5.0)
-        feed(tr, make_samples(n=10, current=0.03))
-        self.assertEqual(tr.state, IDLE)  # 0.0x A is the connected/full band
-
-    def test_charging_starts_after_debounce(self):
-        tr = SessionTracker(CFG, v_target=5.0)
-        samples = make_samples(n=20, current=1.0, period=0.5)  # 10 s > 5 s debounce
+        samples = make_samples(n=10, current=0.005, period=0.5)
         feed(tr, samples)
-        self.assertEqual(tr.state, CHARGING)
-        self.assertEqual(tr.started_at, 5.0)  # debounce_start reached at t=5 s
+        self.assertEqual(tr.state, NO_PHONE)
+        self.assertTrue(all(s.state == NO_PHONE for s in samples))
 
-    def test_charging_does_not_start_early(self):
+    def test_low_current_becomes_charged_after_three_seconds(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        samples = make_samples(n=4, current=1.0, period=0.5)  # only 2 s
-        feed(tr, samples)
-        self.assertEqual(tr.state, IDLE)
-        self.assertTrue(all(s.state == IDLE for s in samples))
-
-    def test_charging_debounce_relabels_candidate_samples(self):
-        cfg = {"session": {**CFG["session"], "debounce_start_s": 2.0}}
-        tr = SessionTracker(cfg, v_target=5.0)
-        samples = make_samples(n=7, current=1.0, period=0.5)  # confirmation at t=2.0 s
-        feed(tr, samples)
-        self.assertEqual(tr.state, CHARGING)
-        self.assertEqual(tr.started_at, 2.0)
-        # The candidate interval was initially IDLE, but is now part of the
-        # confirmed charging interval for CSV and feature calculations.
-        self.assertTrue(all(s.state == CHARGING for s in samples))
-
-    def test_charged_after_low_current_tail(self):
-        tr = SessionTracker(CFG, v_target=5.0)
-        # 10 s charging then 61 s of I~0 -> CHARGED (user rule: I=0 after readings = charged)
-        samples = make_samples(n=20, current=1.0, period=0.5)  # 10 s charging
-        samples += make_samples(n=122, current=0.03, period=0.5, state="CHARGING")  # 61 s full-phone tail
+        samples = make_samples(n=10, current=0.03, period=0.5)
         feed(tr, samples)
         self.assertEqual(tr.state, CHARGED)
         self.assertTrue(tr.ever_charged)
-        self.assertTrue(all(s.state == CHARGED for s in samples[20:]))
+        self.assertTrue(all(s.state == CHARGED for s in samples))
 
-    def test_charged_samples_are_stamped_after_transition(self):
+    def test_charging_starts_when_powered_samples_arrive(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        charging = [
-            Sample(t=k * 0.5, voltage=4.8, current=1.0, power=4.8)
-            for k in range(21)
-        ]
-        low_start = charging[-1].t + 0.5
-        low = [
-            Sample(t=low_start + k * 0.5, voltage=5.0, current=0.03, power=0.15)
-            for k in range(122)
-        ]
-        post = [
-            Sample(t=low[-1].t + (k + 1) * 0.5, voltage=5.0, current=0.03, power=0.15)
-            for k in range(20)
-        ]
+        samples = make_samples(n=10, current=1.0, period=0.5)
+        first_state, first_event = tr.update(samples[0])
+        feed(tr, samples[1:])
+        self.assertEqual(first_state, CHARGING)
+        self.assertEqual(first_event, "charging_start")
+        self.assertEqual(tr.state, CHARGING)
+        self.assertEqual(tr.started_at, 0.0)
+        self.assertTrue(all(s.state == CHARGING for s in samples))
 
-        for sample in charging + low + post:
-            tr.update(sample)
+    def test_powered_start_is_not_reported_as_no_source(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        samples = make_samples(n=6, current=1.0, period=0.5)  # V is present
+        feed(tr, samples)
+        self.assertEqual(tr.state, CHARGING)
+        self.assertTrue(all(s.state == CHARGING for s in samples))
 
+    def test_charging_to_charged_is_reachable_after_low_current_tail(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        charging = make_samples(n=10, current=1.0, period=0.5)
+        low_start = charging[-1].t
+        low = continuous(make_samples(n=10, current=0.03, period=0.5), low_start)
+        feed(tr, charging + low)
         self.assertEqual(tr.state, CHARGED)
-        self.assertIsNotNone(tr.ended_at)
-        transition_index = next(i for i, s in enumerate(charging + low + post) if s.state == CHARGED)
-        self.assertEqual((charging + low + post)[transition_index].state, CHARGED)
-        self.assertTrue(all(s.state == CHARGED for s in (charging + low + post)[transition_index:]))
-        # The low-current debounce candidate is also relabeled as CHARGED.
+        self.assertTrue(tr.ever_charged)
         self.assertTrue(all(s.state == CHARGED for s in low))
+
+    def test_charged_can_return_to_charging_after_three_seconds(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        initial = make_samples(n=8, current=0.03, period=0.5)
+        charging = continuous(make_samples(n=8, current=1.0, period=0.5), initial[-1].t)
+        feed(tr, initial + charging)
+        self.assertEqual(tr.state, CHARGING)
+        self.assertTrue(all(s.state == CHARGING for s in charging))
+
+    def test_charging_to_no_phone_is_debounced(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        charging = make_samples(n=8, current=1.0, period=0.5)
+        leakage = continuous(make_samples(n=8, current=0.005, period=0.5), charging[-1].t)
+        feed(tr, charging + leakage)
+        self.assertEqual(tr.state, NO_PHONE)
+        self.assertTrue(all(s.state == NO_PHONE for s in leakage))
+        self.assertFalse(tr.ever_charged)
+
+    def test_interrupted_transition_keeps_previous_state(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        charging = make_samples(n=8, current=1.0, period=0.5)
+        low_candidate = continuous(make_samples(n=4, current=0.03, period=0.5), charging[-1].t)
+        recovery = continuous(make_samples(n=8, current=1.0, period=0.5), low_candidate[-1].t)
+        feed(tr, charging + low_candidate + recovery)
+        self.assertEqual(tr.state, CHARGING)
+        self.assertTrue(all(s.state == CHARGING for s in low_candidate))
+
+    def test_no_phone_to_charged_is_debounced(self):
+        tr = SessionTracker(CFG, v_target=5.0)
+        initial = make_samples(n=8, current=0.005, period=0.5)
+        low_current = continuous(make_samples(n=8, current=0.03, period=0.5), initial[-1].t)
+        feed(tr, initial + low_current)
+        self.assertEqual(tr.state, CHARGED)
+        self.assertTrue(all(s.state == CHARGED for s in low_current))
 
     def test_open_candidate_when_phone_expected(self):
         tr = SessionTracker(CFG, v_target=5.0, phone_expected=True)
-        samples = make_samples(n=70, current=0.005, period=0.5)  # 35 s NO_PHONE
+        samples = make_samples(n=70, current=0.005, period=0.5)
         feed(tr, samples)
         self.assertEqual(tr.state, NO_PHONE)
         self.assertTrue(tr.open_flag)
         self.assertEqual(tr.last_event, "open_candidate")
 
-    def test_charged_requires_the_low_current_phone_band(self):
+    def test_invalid_read_preserves_last_confirmed_state(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        charging = make_samples(n=20, current=1.0, period=0.5)
-        disconnected = make_samples(n=122, current=0.005, period=0.5, state="CHARGING")
-        feed(tr, charging + disconnected)
-        self.assertEqual(tr.state, NO_PHONE)
-        self.assertFalse(tr.ever_charged)
-        # A confirmed disconnect relabels its debounce candidate as NO_PHONE,
-        # rather than leaving a false CHARGING tail in the CSV.
-        self.assertTrue(all(s.state == NO_PHONE for s in disconnected))
-
-    def test_debounce_candidate_is_kept_in_previous_state_if_interrupted(self):
-        tr = SessionTracker(CFG, v_target=5.0)
-        samples = make_samples(n=20, current=1.0, period=0.5)
-        low_candidate = make_samples(n=2, current=0.03, period=0.5, state="CHARGING")
-        recovery = make_samples(n=4, current=1.0, period=0.5, state="CHARGING")
-        feed(tr, samples + low_candidate + recovery)
-        self.assertEqual(tr.state, CHARGING)
-        self.assertTrue(all(s.state == CHARGING for s in low_candidate))
-
-    def test_idle_to_no_phone_debounce_relabels_candidate_samples(self):
-        cfg = {"session": {**CFG["session"], "debounce_end_s": 1.0}}
-        tr = SessionTracker(cfg, v_target=5.0)
-        initial = make_samples(n=3, current=0.03, period=0.5)
-        candidate = make_samples(n=4, current=0.005, period=0.5, state=IDLE)
-        # Make timestamps continuous across the state change.
-        for index, sample in enumerate(candidate):
-            sample.t = initial[-1].t + (index + 1) * 0.5
-        feed(tr, initial + candidate)
-        self.assertEqual(tr.state, NO_PHONE)
-        self.assertTrue(all(s.state == NO_PHONE for s in candidate))
-
-    def test_no_phone_to_idle_debounce_relabels_candidate_samples(self):
-        cfg = {"session": {**CFG["session"], "debounce_end_s": 1.0}}
-        tr = SessionTracker(cfg, v_target=5.0)
-        initial = make_samples(n=3, current=0.005, period=0.5)
-        candidate = make_samples(n=4, current=0.03, period=0.5, state=NO_PHONE)
-        for index, sample in enumerate(candidate):
-            sample.t = initial[-1].t + (index + 1) * 0.5
-        feed(tr, initial + candidate)
-        self.assertEqual(tr.state, IDLE)
-        self.assertTrue(all(s.state == IDLE for s in candidate))
-
-    def test_invalid_read_cancels_charging_candidate(self):
-        cfg = {"session": {**CFG["session"], "debounce_start_s": 2.0}}
-        tr = SessionTracker(cfg, v_target=5.0)
-        candidate = make_samples(n=3, current=1.0, period=0.5)
+        candidate = make_samples(n=4, current=1.0, period=0.5)
         feed(tr, candidate)
-        invalid = Sample(t=1.5, voltage=float("nan"), current=float("nan"), power=0.0, valid=False)
+        invalid = Sample(t=2.0, voltage=float("nan"), current=float("nan"), power=0.0, valid=False)
         tr.update(invalid)
-        self.assertEqual(tr.state, IDLE)
-        self.assertTrue(all(s.state == IDLE for s in candidate))
+        self.assertEqual(tr.state, CHARGING)
+        self.assertEqual(invalid.state, CHARGING)
 
     def test_loss_of_vbus_is_immediate_no_source(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        charging = make_samples(n=20, current=1.0, period=0.5)
+        charging = make_samples(n=8, current=1.0, period=0.5)
         feed(tr, charging)
         self.assertEqual(tr.state, CHARGING)
-        sample = Sample(t=10.0, voltage=0.0, current=0.0, power=0.0)
+        sample = Sample(t=4.0, voltage=0.0, current=0.0, power=0.0)
         state, event = tr.update(sample)
         self.assertEqual((state, event), (NO_SOURCE, None))
         self.assertEqual(sample.state, NO_SOURCE)
 
     def test_fault_clears_candidate_and_remains_terminal(self):
-        cfg = {"session": {**CFG["session"], "debounce_start_s": 2.0}}
-        tr = SessionTracker(cfg, v_target=5.0)
-        candidate = make_samples(n=2, current=1.0, period=0.5)
+        tr = SessionTracker(CFG, v_target=5.0)
+        candidate = make_samples(n=4, current=1.0, period=0.5)
         feed(tr, candidate)
-        fault = Sample(t=1.0, voltage=0.2, current=2.5, power=0.5)
+        fault = Sample(t=2.0, voltage=0.2, current=2.5, power=0.5)
         state, event = tr.update(fault)
         self.assertEqual((state, event), (FAULT, "fault"))
-        later = Sample(t=2.0, voltage=5.0, current=1.0, power=5.0)
+        later = Sample(t=3.0, voltage=5.0, current=1.0, power=5.0)
         self.assertEqual(tr.update(later)[0], FAULT)
         self.assertEqual(later.state, FAULT)
 
     def test_current_band_boundaries(self):
-        for current, expected in ((0.009, NO_PHONE), (0.010, IDLE), (0.099, IDLE), (0.100, IDLE)):
+        cases = ((0.009, NO_PHONE), (0.010, CHARGED), (0.099, CHARGED), (0.100, CHARGING))
+        for current, expected in cases:
             tr = SessionTracker(CFG, v_target=5.0)
-            sample = make_samples(n=1, current=current)[0]
-            tr.update(sample)
+            samples = make_samples(n=8, current=current, period=0.5)
+            feed(tr, samples)
             self.assertEqual(tr.state, expected, f"current={current}")
-        tr = SessionTracker(CFG, v_target=5.0)
-        samples = make_samples(n=12, current=0.100, period=0.5)
-        feed(tr, samples)
-        self.assertEqual(tr.state, CHARGING)
 
     def test_invalid_current_band_configuration_is_rejected(self):
         bad_cfg = {
@@ -230,15 +202,15 @@ class TestStateMachine(unittest.TestCase):
         tr = SessionTracker(CFG, v_target=5.0)
         bad = Sample(t=0.0, voltage=float("nan"), current=float("nan"), power=0.0, valid=False)
         tr.update(bad)
-        self.assertEqual(tr.state, NO_SOURCE)  # unchanged, no crash
+        self.assertEqual(tr.state, NO_SOURCE)
 
-    def test_samples_stamped_with_state(self):
+    def test_samples_are_stamped_with_current_confirmed_state(self):
         tr = SessionTracker(CFG, v_target=5.0)
-        samples = make_samples(n=20, current=1.0, period=0.5)
-        for s in samples:
-            tr.update(s)
-        self.assertTrue(all(s.state == CHARGING for s in samples[10:]))
-        self.assertIn(OPEN, (OPEN, IDLE, CHARGING))  # constants resolve
+        samples = make_samples(n=10, current=1.0, period=0.5)
+        for sample in samples:
+            tr.update(sample)
+        self.assertTrue(all(s.state == CHARGING for s in samples))
+        self.assertEqual(OPEN, "OPEN")
 
 
 if __name__ == "__main__":

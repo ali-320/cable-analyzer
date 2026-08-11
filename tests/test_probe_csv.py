@@ -37,7 +37,7 @@ class TestProbeCsvCollection(unittest.TestCase):
             self.assertTrue(samples)
             self.assertTrue(any(s.state == "VERIFICATION" for s in samples))
             measurement_states = {s.state for s in samples if s.state != "VERIFICATION"}
-            self.assertTrue(measurement_states & {"IDLE", "CHARGING"})
+            self.assertTrue(measurement_states & {"CHARGING", "CHARGED", "NO_PHONE"})
             self.assertGreaterEqual(live.call_count, 1)
         finally:
             ch224k.close()

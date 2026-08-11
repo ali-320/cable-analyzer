@@ -72,8 +72,10 @@ i_fully_charged_min = 0.010 # A ; inclusive lower bound for the low-current phon
 i_fully_charged_max = 0.10  # A ; exclusive upper bound; normally equals charge start
 i_no_load = 0.05           # A ; analytics threshold for low-current dips/leakage (legacy feature setting)
 i_charge_start = 0.10     # A ; inclusive lower bound for active charging
-debounce_start_s = 2.0
-debounce_end_s = 3.0     # current in the fully-charged band for this long after charging = phone charged
+debounce_state_s = 3.0   # every normal current-band transition requires 3 s
+# Legacy names retained for compatibility; SessionTracker uses debounce_state_s.
+debounce_start_s = 3.0
+debounce_end_s = 3.0
 debounce_finish_s = 10.0  # keep logging CHARGED samples before ending charge mode
 charge_timeout_s = 7200   # give up waiting for CHARGED after this
 open_timeout_s = 5.0     # NO_PHONE this long while a phone is expected -> OPEN candidate

@@ -1,21 +1,16 @@
-"""Charging-session state machine (DEVELOPMENT_PLAN.md §3).
+"""Charging-session state machine.
 
-Encodes the user's I=0 rules:
+The phone-side INA219 current is classified into three normal bands:
 
-* ``NO_PHONE`` - V present, only board/fixture leakage is measured
-* ``IDLE``    - V present, a phone is connected but draws only its low-current band
-* ``CHARGING``- active phone charging current is sustained
-* ``CHARGED`` - after charging, current drops into the low-current band
+* ``CHARGING`` - active charging current (>= ``i_charge_start``)
+* ``CHARGED``  - connected/full-phone maintenance current
+  (``i_fully_charged_min <= I < i_charge_start``)
+* ``NO_PHONE`` - board/fixture leakage only (``I < i_no_phone_max``)
 
-The current bands are configurable in ``config.toml``. They deliberately
-separate a connected/full phone (typically 0.01–0.099 A) from an absent phone
-(typically below 0.010 A).
-
-Plus NO_SOURCE, OPEN and FAULT. Every transition is debounced so momentary
-dips never split a session. The tracker stamps ``sample.state`` as samples
-stream through it. Samples in confirmed debounce windows are relabeled
-retroactively to the new state; interrupted candidates retain the previous
-confirmed state.
+Every normal band transition is debounced for the configured state debounce
+period (3 seconds by default). Samples in a confirmed candidate window are
+retroactively relabeled to the destination state. ``NO_SOURCE`` and ``FAULT``
+are immediate safety states.
 """
 from __future__ import annotations
 
@@ -23,7 +18,6 @@ from src.telemetry.models import Sample
 
 NO_SOURCE = "NO_SOURCE"
 NO_PHONE = "NO_PHONE"
-IDLE = "IDLE"
 CHARGING = "CHARGING"
 CHARGED = "CHARGED"
 OPEN = "OPEN"
@@ -38,12 +32,13 @@ class SessionTracker:
         phone_expected: bool = False,
     ) -> None:
         s = cfg.get("session", {})
-        # Current bands are measured on the phone side of the INA219.
-        # Keep i_no_load as a compatibility alias for feature extraction, but
-        # use the explicit bands below for state decisions.
         self.i_no_phone_max = float(s.get("i_no_phone_max", 0.010))
-        self.i_fully_charged_min = float(s.get("i_fully_charged_min", self.i_no_phone_max))
-        self.i_fully_charged_max = float(s.get("i_fully_charged_max", 0.10))
+        self.i_fully_charged_min = float(
+            s.get("i_fully_charged_min", self.i_no_phone_max)
+        )
+        self.i_fully_charged_max = float(
+            s.get("i_fully_charged_max", 0.10)
+        )
         self.i_no_load = float(s.get("i_no_load", self.i_no_phone_max))
         self.i_start = float(s.get("i_charge_start", self.i_fully_charged_max))
         if not (
@@ -57,10 +52,15 @@ class SessionTracker:
                 "0 <= i_no_phone_max == i_fully_charged_min < "
                 "i_fully_charged_max == i_charge_start"
             )
-        self.debounce_start = float(s.get("debounce_start_s", 5.0))
-        self.debounce_end = float(s.get("debounce_end_s", 60.0))
-        # Keep collecting and logging CHARGED samples after the transition so
-        # the terminal state is visible in the CSV before charge mode exits.
+
+        # One debounce duration applies to every normal current-band change.
+        # ``debounce_state_s`` is the new explicit setting; the legacy end
+        # setting remains a fallback for custom/test configurations.
+        self.debounce_s = float(
+            s.get("debounce_state_s", s.get("debounce_end_s", 3.0))
+        )
+        self.debounce_start = self.debounce_s
+        self.debounce_end = self.debounce_s
         self.debounce_finish = float(s.get("debounce_finish_s", 10.0))
         self.open_timeout = float(s.get("open_timeout_s", 30.0))
         self.v_present_min = 1.0
@@ -75,54 +75,49 @@ class SessionTracker:
         self.fault_reason: str | None = None
         self.last_event: str | None = None
 
-        self._since_chg: float | None = None   # candidate CHARGING start time
-        self._since_low: float | None = None   # time current entered the fully-charged band
-        self._since_no_phone: float | None = None  # time current entered the leakage band
-        self._since_idle_transition: float | None = None  # IDLE/NO_PHONE candidate
-        self._idle_since: float | None = None  # time entered IDLE/NO_PHONE without charging
-
-        # Samples in a debounce candidate initially carry the previously
-        # confirmed state. If the candidate is confirmed, they are relabeled
-        # retroactively; if it is interrupted, they remain in that previous
-        # state. This keeps the debounce interval out of the wrong state's
-        # calculations without discarding the raw readings.
-        self._pending_samples: list[Sample] = []
+        self._pending_since: float | None = None
         self._pending_target: str | None = None
+        self._pending_samples: list[Sample] = []
+        self._no_phone_since: float | None = None
 
     # ------------------------------------------------------------------ debounce helpers
     def _begin_pending(self, target: str, sample: Sample) -> None:
         if self._pending_target != target:
             self._pending_samples.clear()
             self._pending_target = target
+            self._pending_since = sample.t
         self._pending_samples.append(sample)
 
-    def _clear_pending(self, target: str | None = None) -> None:
-        if target is None or self._pending_target == target:
-            self._pending_samples.clear()
-            self._pending_target = None
+    def _clear_pending(self) -> None:
+        self._pending_since = None
+        self._pending_target = None
+        self._pending_samples.clear()
 
     def _confirm_pending(self, target: str) -> None:
         if self._pending_target == target:
             for pending in self._pending_samples:
                 pending.state = target
-        self._clear_pending(target)
+        self._clear_pending()
 
     def _reset_candidates(self) -> None:
-        self._since_chg = None
-        self._since_low = None
-        self._since_no_phone = None
-        self._since_idle_transition = None
         self._clear_pending()
+
+    def _desired_state(self, voltage: float, current: float) -> str:
+        if voltage < self.v_present_min:
+            return NO_SOURCE
+        if current >= self.i_start:
+            return CHARGING
+        if current < self.i_no_phone_max:
+            return NO_PHONE
+        return CHARGED
 
     # ------------------------------------------------------------------ API
     def update(self, sample: Sample) -> tuple[str, str | None]:
-        """Feed one sample; returns ``(state, event)``.
+        """Feed one sample and return ``(confirmed_state, event)``.
 
-        Events: ``charging_start``, ``charged``, ``open_candidate``, ``fault``
-        or None. The sample's ``state`` field is stamped with the current
-        confirmed state for downstream feature extraction. A pending
-        transition buffers sample references and relabels them if the debounce
-        completes.
+        Normal state changes require continuous residence in the destination
+        current band for ``debounce_s``. Candidate samples retain the previous
+        label until confirmation; then they are relabeled retroactively.
         """
         t, v, i = sample.t, sample.voltage, sample.current
 
@@ -132,131 +127,83 @@ class SessionTracker:
             if v < 0.5 and i > 1.0:
                 return self._fault("short_condition (V<0.5 V while I>1 A)", sample)
 
-        if self.state in (FAULT, CHARGED):  # fault/charged are terminal for a run
-            sample.state = self.state
-            return self.state, None
+        # FAULT is latched for the remainder of the session. Safety cannot be
+        # cleared by a later apparently normal sensor reading.
+        if self.state == FAULT:
+            sample.state = FAULT
+            return FAULT, None
 
         if not sample.valid:
-            # An invalid read cannot prove continuity through a debounce
-            # window, so the candidate is canceled and the sample keeps the
-            # previously confirmed state.
             self._reset_candidates()
             sample.state = self.state
             return self.state, None
 
-        if v < self.v_present_min:
-            desired = NO_SOURCE
-        elif i >= self.i_start:
-            # 0.xxx A: active phone charging.
-            desired = CHARGING
-        elif i < self.i_no_phone_max:
-            # 0.00xx A: only board/fixture leakage; no phone is connected.
-            desired = NO_PHONE
-        else:
-            # 0.0xx A: phone is connected but is in its low-current band
-            # (normally fully charged or waiting for charge negotiation).
-            desired = IDLE
+        desired = self._desired_state(v, i)
 
+        # NO_SOURCE is only a voltage condition. On the first valid powered
+        # sample, leave the startup sentinel immediately and classify the
+        # current band; otherwise a powered phone would be displayed as
+        # NO_SOURCE during the first debounce window. Debounce applies to all
+        # subsequent CHARGING/CHARGED/NO_PHONE transitions.
         if self.state == NO_SOURCE and desired != NO_SOURCE:
-            # Power appeared. Preserve the existing behavior that low-current
-            # presence is immediately classified, while active charging starts
-            # a debounce candidate from the IDLE baseline.
-            self.state = IDLE if desired == CHARGING else desired
+            self._clear_pending()
+            self.state = desired
+            startup_event: str | None = None
+            if desired == CHARGING:
+                self.started_at = t
+                startup_event = "charging_start"
+            elif desired == CHARGED:
+                self.ended_at = t
+                self.ever_charged = True
+                startup_event = "charged"
+            elif desired == NO_PHONE:
+                self._no_phone_since = t
+            if startup_event is not None:
+                self.last_event = startup_event
+            sample.state = self.state
+            return self.state, startup_event
 
-        event: str | None = None
-
-        # Loss of VBUS is an immediate source/safety transition. It must not
-        # remain mislabeled as CHARGING while the source is absent.
+        # VBUS loss is an immediate transition and never waits for debounce.
         if desired == NO_SOURCE:
             self._reset_candidates()
             if self.state != NO_SOURCE:
                 self.state = NO_SOURCE
-                self._idle_since = t
+                self._no_phone_since = t
             sample.state = self.state
             return self.state, None
 
-        if desired == CHARGING:
-            self._since_low = None
-            self._since_no_phone = None
-            self._since_idle_transition = None
-            self._idle_since = None
-            if self.state != CHARGING:
-                self._begin_pending(CHARGING, sample)
-                if self._since_chg is None:
-                    self._since_chg = t
-                elif (t - self._since_chg) >= self.debounce_start:
-                    self.state = CHARGING
-                    self._confirm_pending(CHARGING)
+        event: str | None = None
+        if desired == self.state:
+            self._reset_candidates()
+        else:
+            self._begin_pending(desired, sample)
+            if (
+                self._pending_since is not None
+                and t - self._pending_since >= self.debounce_s
+            ):
+                self.state = desired
+                self._confirm_pending(desired)
+                if desired == CHARGING:
                     self.started_at = t
                     event = "charging_start"
-            else:
-                self._since_chg = None
-                self._clear_pending()
+                elif desired == CHARGED:
+                    self.ended_at = t
+                    self.ever_charged = True
+                    event = "charged"
+
+        if self.state == NO_PHONE:
+            if self._no_phone_since is None:
+                self._no_phone_since = t
+            if (
+                not self.open_flag
+                and self.phone_expected
+                and not self.ever_charged
+                and t - self._no_phone_since >= self.open_timeout
+            ):
+                self.open_flag = True
+                event = event or "open_candidate"
         else:
-            self._since_chg = None
-            self._clear_pending(CHARGING)
-
-            if self.state == CHARGING:
-                # Current dropped while charging. Only the 0.0xx A phone band
-                # can prove CHARGED; the 0.00xx A leakage band indicates a
-                # disconnect and must not be mislabeled as a full phone.
-                if desired == IDLE:
-                    self._since_no_phone = None
-                    self._since_idle_transition = None
-                    self._begin_pending(CHARGED, sample)
-                    if self._since_low is None:
-                        self._since_low = t
-                    elif (t - self._since_low) >= self.debounce_end:
-                        self.state = CHARGED
-                        self._confirm_pending(CHARGED)
-                        self.ended_at = t
-                        self.ever_charged = True
-                        event = "charged"
-                elif desired == NO_PHONE:
-                    self._since_low = None
-                    self._since_idle_transition = None
-                    self._begin_pending(NO_PHONE, sample)
-                    if self._since_no_phone is None:
-                        self._since_no_phone = t
-                    elif (t - self._since_no_phone) >= self.debounce_end:
-                        self.state = NO_PHONE
-                        self._confirm_pending(NO_PHONE)
-                        self._since_no_phone = None
-                else:
-                    self._since_low = None
-                    self._since_no_phone = None
-                    self._since_idle_transition = None
-                    self._clear_pending()
-            else:
-                # IDLE <-> NO_PHONE is also debounced. The candidate samples
-                # remain in the old state unless the new state is confirmed.
-                if desired in (IDLE, NO_PHONE) and desired != self.state:
-                    if self._pending_target != desired:
-                        self._since_idle_transition = t
-                    self._begin_pending(desired, sample)
-                    if (
-                        self._since_idle_transition is not None
-                        and (t - self._since_idle_transition) >= self.debounce_end
-                    ):
-                        self.state = desired
-                        self._confirm_pending(desired)
-                        self._since_idle_transition = None
-                        self._idle_since = t
-                else:
-                    self._since_idle_transition = None
-                    self._clear_pending()
-
-                if self._idle_since is None:
-                    self._idle_since = t
-                elif (
-                    not self.open_flag
-                    and self.phone_expected
-                    and not self.ever_charged
-                    and self.state == NO_PHONE
-                    and (t - self._idle_since) >= self.open_timeout
-                ):
-                    self.open_flag = True
-                    event = "open_candidate"
+            self._no_phone_since = None
 
         sample.state = self.state
         if event is not None:

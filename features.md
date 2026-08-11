@@ -15,7 +15,7 @@ For every sample in the session, the state labels already include any confirmed 
 | Working variable | Definition |
 |------------------|-----------|
 | `analysis_samples` | all samples except `VERIFICATION`; verification rows remain in the CSV but are excluded from feature calculations | 
-| `busy_all` | non-`VERIFICATION` samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"IDLE", "CHARGING", "PROBE", "UNKNOWN", ""}` |
+| `busy_all` | non-`VERIFICATION` samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"CHARGING", "PROBE", "UNKNOWN", ""}` |
 | `busy` (steady-only) | subset of `busy_all` where `current ≥ steady_frac · peak_i` (`steady_frac = 0.5`) — used for stability features so the phone's current ramp-up / CC→CV taper-down do not pollute them |
 | `valid` | valid non-`VERIFICATION` samples (range-checked I²C reads); verification rows remain available in the CSV but are excluded from features |
 
@@ -241,15 +241,15 @@ spike_count = spikes
 
 Unitless. Genuine arc / bad-contact events are typically 5–50 mV / 0.1–1 A instantaneous jumps; ADC jitter is multi-millisecond noise, not sub-second excursions.
 
-### 19. `idle_I` — mean current of true-IDLE samples
+### 19. `idle_I` — mean current of true `NO_PHONE` samples
 
 ```text
-idle       = [s for s in analysis_samples if s.valid AND (s.state == "NO_PHONE" OR (s.state == "IDLE" AND s.current < i_no_phone))]
+idle       = [s for s in analysis_samples if s.valid AND s.state == "NO_PHONE"]
 idle_I     = mean(I[s])        if idle is non-empty
 idle_I     = None              otherwise
 ```
 
-Units: A. Captures the genuine no-load leakage current of the cable once the phone is detected as CHARGED. Threshold for the `LEAKY` tag: `idle_leak_ma`, default 20 mA.
+Units: A. Captures the genuine no-load leakage current when the phone is absent. Threshold for the `LEAKY` tag: `idle_leak_ma`, default 20 mA.
 
 ### 20. `n_busy` — number of busy samples that fed the resistance statistics
 
@@ -333,7 +333,7 @@ So the engineered features 1, 2, 6, 21, and 22 directly drive what `verdict.conf
 | 16 | `dR_dt_mOhm_per_min` | `(slope(r_cable vs t) [Ω/s]) · 60 000` | mΩ/min |
 | 17 | `interruption_frac` | dips/CHARGING (or fallback over valid) | fraction |
 | 18 | `spike_count` | exceedances of 2 A/s or 0.2 V/s over 0.2 s windows | — |
-| 19 | `idle_I` | `mean(I)` over `NO_PHONE` samples (or legacy low-current fallback) | A |
+| 19 | `idle_I` | `mean(I)` over `NO_PHONE` samples | A |
 | 20 | `n_busy` | `len(busy)` | samples |
 | 21 | `valid_frac` | `len(valid) / len(analysis_samples)` | fraction |
 | 22 | `duration_s` | `valid[−1].t − valid[0].t` | s |

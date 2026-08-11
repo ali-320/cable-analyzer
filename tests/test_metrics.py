@@ -67,7 +67,7 @@ class TestFeatures(unittest.TestCase):
             for k in range(20)
         ]
         measurement = [
-            Sample(t=1.0 + k * 0.04, voltage=4.8, current=1.0, power=4.8, state="IDLE")
+            Sample(t=1.0 + k * 0.04, voltage=4.8, current=1.0, power=4.8, state="CHARGING")
             for k in range(20)
         ]
         f = compute_features(verification + measurement, v_target=5.0)
@@ -79,7 +79,7 @@ class TestFeatures(unittest.TestCase):
     def test_full_phone_current_is_not_leakage(self):
         samples = make_samples(current=1.0, n=20)
         samples += [
-            Sample(t=1.0 + k * 0.04, voltage=5.0, current=0.03, power=0.15, state="IDLE")
+            Sample(t=1.0 + k * 0.04, voltage=5.0, current=0.03, power=0.15, state="CHARGING")
             for k in range(20)
         ]
         f = compute_features(samples, v_target=5.0, i_no_phone=0.01)

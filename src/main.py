@@ -15,8 +15,8 @@ at each step; no CH224K GPIO/PWR_OK pins are used.
 The manual setup now places the INA219 inline between CH224K VBUS and the
 phone. Manual mode first verifies voltage support during VERIFICATION windows,
 then allocates the measurement budget across supported 5 V, 9 V, and 12 V
-ranges. Measurement samples use the normal charge states (IDLE, CHARGING,
-CHARGED, NO_PHONE, NO_SOURCE, or FAULT).
+ranges. Measurement samples use the normal charge states (CHARGING, CHARGED,
+NO_PHONE, NO_SOURCE, or FAULT).
 Unsupported ranges are excluded; if 5 V is unsupported, the highest supported
 range is used as the quality reference and reported explicitly.
 """
@@ -239,8 +239,8 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         """Collect one probe phase and print a live sample every second.
 
         VERIFICATION is a probe-only phase. Measurement phases are annotated by
-        SessionTracker so their CSV states match charge mode (IDLE, CHARGING,
-        CHARGED, NO_PHONE, NO_SOURCE, or FAULT).
+        SessionTracker so their CSV states match charge mode (CHARGING, CHARGED,
+        NO_PHONE, NO_SOURCE, or FAULT).
         """
         duration = max(count, 1) / max(rate, 1e-6)
         next_report_s = 1.0
@@ -747,8 +747,7 @@ def main() -> int:
         return 2
 
     if args.demo:
-        cfg["session"]["debounce_start_s"] = min(float(cfg["session"]["debounce_start_s"]), 3.0)
-        cfg["session"]["debounce_end_s"] = min(float(cfg["session"]["debounce_end_s"]), 8.0)
+        cfg["session"]["debounce_state_s"] = min(float(cfg["session"].get("debounce_state_s", 3.0)), 3.0)
         args.phone_expected = True
 
     if args.length is not None:

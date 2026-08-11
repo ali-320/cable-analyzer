@@ -173,9 +173,10 @@ fully-charged maintenance current `0.0xx A`). Only the no-phone/leakage band
 remain in the CSV for audit but are excluded from quality calculations. It then
 divides the measurement budget (default 3000 readings) equally among the
 voltages whose flag is true. Measurement rows are classified with the normal
-charge states (`IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or
-`FAULT`) and are eligible for quality calculations when valid and above the
-current threshold. Unsupported ranges are excluded; if 5 V is unsupported, the
+charge states (`CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or `FAULT`).
+Every normal band transition requires 3 seconds of continuous readings;
+confirmed candidate samples are relabeled to the destination state. They are
+eligible for quality calculations when valid and above the current threshold. Unsupported ranges are excluded; if 5 V is unsupported, the
 lowest supported higher voltage becomes the quality reference and the verdict
 is marked `FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
 separately and does not prove that the device rejects that voltage. If no

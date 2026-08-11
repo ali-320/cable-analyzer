@@ -90,7 +90,7 @@ The overrides live in `_force_grade()` and follow a *worst-of* rule: they can on
 | Tag                              | Feature(s) # | Driving feature(s) | Trigger (from `config.toml` rules) |
 |----------------------------------|:------------:|--------------------|--------------------------------------|
 | `INTERMITTENT`                   | **#17** and/or **#18** | `interruption_frac`, `spike_count` | either `interruption_frac ≥ interruption_warn_frac` (default **1 %**) **or** `spike_count > spike_count_warn` (default **10**) |
-| `LEAKY`                          | **#19**     | `idle_I`           | `idle_I × 1000 > idle_leak_ma` (default **20 mA**) of true-IDLE samples |
+| `LEAKY`                          | **#19**     | `idle_I`           | `idle_I × 1000 > idle_leak_ma` (default **20 mA**) of NO_PHONE samples |
 | `NON_LINEAR`                     | **#4** and **#5** | `r_p95`, `r_p5` | `(r_p95 − r_p5) / r_mean > nonlinear_ratio` (default **0.30**) |
 | `HIGH_LOSS`                      | — (grade-derived) | — | Auto-applied whenever the final grade is **D** or **F** |
 | `PD_BLOCKED`                     | — (probe dict) | — | CH224K could not negotiate a USB-PD contract at the listed voltage(s) |
