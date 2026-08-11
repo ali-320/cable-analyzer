@@ -10,6 +10,9 @@ THE FAILURE WAS BECAUSE THE INA219 GOT DISCONNECTED. THE 5V immediately terminat
 During calibration I believe that we should just take some sufficient readings to calculate the resistance of the board, without specifying the current for now.
 If there is a way to communicate with the chager to supply specific current and it help in calculating the resistance,
 then tell me and we start working on it later, but this issue needs to be fixed for now. 
+[DONE]
+It is already doing as according to my proposition, the current is specified to the load in the auto mode.  
+
 
 3. Why does when I run the system in probe mode, all the states become probe, in the resulting .csv file.
 [DONE]
@@ -19,6 +22,8 @@ This is because in PROBE mode, the IDLE state represents checking the flags, and
 
 4. The IDLE state and the CHARGED state, both work on the lower current band, we can remove one of them.
 The only difference is that the the phone first stays in IDLE and can only go to CHARGED after CHARGING state.
+[OPTIONAL]
+
 
 5. Tell me that what does the phone_taper_s represents in the config.toml
 
@@ -29,6 +34,19 @@ state transitions. They shouldn't be taken if the state transition is successful
 
 
 7. The confidence formula may not be working because the confidence in all tests is coming out to be 0.0
+[NEEDS MORE CHECKING]
+
+
+8. During the VERIFICATION state, if the mobile is fully charged and receiving current in 0.0xx, it says that there 
+is no current and says that voltages are not supported.
+[DONE]
+Now it supports the CHARGED state as well.
+
+
+
+9. I ran the code in charge mode, it got into the CHARGING state, after which the curren remained in the CHARGED state for
+quite a while, but it never went to the charged state.
+
 
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx

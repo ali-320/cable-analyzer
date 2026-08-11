@@ -23,7 +23,7 @@ The exact limits are configuration values, not hard-coded measurements. The defa
 | `CHARGED` | A phone that was charging has settled into its low-current band | Previous state was `CHARGING` and `i_fully_charged_min ≤ I < i_fully_charged_max` for `debounce_end_s` | `[session] debounce_end_s`; charge mode logs this state for `debounce_finish_s` before stopping |
 | `OPEN` | Event flag indicating expected phone did not begin charging | `phone_expected=True`, `NO_PHONE` persists for `open_timeout_s`, and no charging occurred | Stored as `SessionTracker.open_flag`; the sample state remains `NO_PHONE` |
 | `FAULT` | Safety fault | Voltage/current safety limit violated | Immediate and latched |
-| `VERIFICATION` | Probe-only voltage-support check | Manual probe support window; current is compared with `i_charge_start` | Not used in quality calculations |
+| `VERIFICATION` | Probe-only voltage-support check | Manual probe support window; current at or above `i_no_phone_max` (active charging or fully-charged maintenance current) proves support; only lower leakage means no current | Not used in quality calculations |
 | `PROBE` | Legacy controlled-load probe sample | Explicit automatic/GPIO probe window | Automatic load-probe label; manual inline measurements use the charge states below |
 | `UNKNOWN` | Initial/default sample state | Before classification | Default in `Sample` and `Sampler` |
 
@@ -50,6 +50,6 @@ A transition candidate is not immediately accepted as a new state. Samples colle
 
 ## Probe-mode distinction
 
-In manual probe mode, the short support window is labeled `VERIFICATION`. Its samples are retained in the CSV for audit but excluded from all quality features. The longer measurement windows are passed through `SessionTracker`, so each sample is labeled `IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or `FAULT` according to the measured voltage/current and configured debounce values. These measurement samples are eligible for feature extraction when they meet the normal validity and current thresholds.
+In manual probe mode, the short support window is labeled `VERIFICATION`. A voltage is considered supported when at least half of its valid verification samples have current at or above `i_no_phone_max`: this includes active charging (`0.xx A`) and fully-charged maintenance current (`0.0xx A`). Only the no-phone/leakage band (`0.00xx A`, below `i_no_phone_max`) is treated as unsupported. Its samples are retained in the CSV for audit but excluded from all quality features. The longer measurement windows are passed through `SessionTracker`, so each sample is labeled `IDLE`, `CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or `FAULT` according to the measured voltage/current and configured debounce values. These measurement samples are eligible for feature extraction when they meet the normal validity and current thresholds.
 
 A fall from `CHARGING` into the `0.0xx A` band can become `CHARGED` after the end debounce. A fall into the `0.00xx A` band is classified as `NO_PHONE`, not `CHARGED`, because it is more consistent with disconnect/leakage than a full phone.

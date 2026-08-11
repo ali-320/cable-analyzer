@@ -183,7 +183,15 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
     verify_tol = float(ch_cfg.get("verify_tolerance", 0.05))
     manual_verify_tol_v = float(ch_cfg.get("manual_verify_tolerance_v", 1.0))
     manual_verify_min_step_v = float(ch_cfg.get("manual_verify_min_step_v", 0.5))
-    i_start = float(session_cfg.get("i_charge_start", 0.10))
+    # Verification answers a different question from quality measurement:
+    # does the phone/load draw anything above board leakage at this voltage?
+    # Active charging (>= i_charge_start) and fully-charged maintenance draw
+    # (i_fully_charged_min .. < i_charge_start) both prove support. Only the
+    # no-phone leakage band (< i_no_phone_max) means no current is present.
+    i_support_min = float(session_cfg.get(
+        "i_no_phone_max",
+        session_cfg.get("i_fully_charged_min", 0.010),
+    ))
 
     support_n = max(1, int(pr.get("manual_support_readings", round(rate * 2.0))))
     total_n = max(1, int(pr.get("manual_total_readings", 3000)))
@@ -302,14 +310,18 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
 
         check_samples = collect(support_n, phase_state="VERIFICATION")
         valid = [s for s in check_samples if s.valid]
-        active = [s for s in valid if s.current >= i_start]
-        active_fraction = len(active) / len(valid) if valid else 0.0
+        # A supported voltage may produce either active charging current or
+        # low maintenance current from an already-full phone. The only
+        # unsupported case is the very-low no-phone/fixture-leakage band.
+        current_present = [s for s in valid if s.current >= i_support_min]
+        active_fraction = len(current_present) / len(valid) if valid else 0.0
         supports = bool(valid) and active_fraction >= 0.5
         support_flags[str(v)] = supports
         support_observations[str(v)] = "current_observed" if supports else "no_current_observed"
         record.update({
-            "supports_voltage": supports,                "support_reason": "charging_current_in_VERIFICATION" if supports else "no_current_in_VERIFICATION",
+            "supports_voltage": supports,                "support_reason": "current_in_VERIFICATION" if supports else "no_current_in_VERIFICATION",
             "support_i_mean": round(sum(s.current for s in valid) / len(valid), 4) if valid else 0.0,
+            "support_current_min_a": i_support_min,
             "support_active_fraction": round(active_fraction, 3),
             "support_n_valid": len(valid),
         })
@@ -318,7 +330,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
             supported.append(v)
         else:
             results["unsupported_voltages"].append(v)
-            print(f"  No charging current detected in the VERIFICATION check at {v:g} V; support flag = False.")
+            print(f"  No phone current above the leakage threshold was detected in the VERIFICATION check at {v:g} V; support flag = False.")
 
     results["support_flags"] = support_flags
 
@@ -439,6 +451,10 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
     rate = float(cfg["hardware"].get("sample_rate_hz", 25.0))
     meas = cfg.get("measurement", {})
     r_fixture = float(meas.get("r_fixture_ohm", 0.0))
+    # In any manual compatibility check, phone maintenance current also proves
+    # that the selected voltage is usable; only the no-phone leakage band means
+    # that no load is present.
+    support_current_min = float(cfg.get("session", {}).get("i_no_phone_max", 0.010))
     simulate = cfg["hardware"].get("simulate", False)
 
     load.phone_switch(False)  # GPIO interlock in legacy wiring; no-op in manual mode
@@ -540,7 +556,7 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
             valid = [s for s in samples if s.valid]
             i_mean = (sum(s.current for s in valid) / len(valid)) if valid else 0.0
             v_mean = (sum(s.voltage for s in valid) / len(valid)) if valid else None
-            current_present = i_mean >= float(cfg.get("session", {}).get("i_charge_start", 0.10))
+            current_present = i_mean >= support_current_min
             reading = {
                 "v_target": v,
                 "v_mean": round(v_mean, 3) if v_mean is not None else None,

@@ -165,7 +165,11 @@ python -m src.main --manual --mode probe --length 1.0
 ```
 Keep the phone connected. The program asks you to select 5 V, 9 V, and 12 V
 manually.For each voltage it first collects a `VERIFICATION` support-check window
-(default 50 readings) and stores a `support_flags` entry. Verification rows
+(default 50 readings) and stores a `support_flags` entry. A voltage is supported
+when at least half of valid readings show current at or above
+`session.i_no_phone_max` (this includes both active charging `0.xx A` and
+fully-charged maintenance current `0.0xx A`). Only the no-phone/leakage band
+`0.00xx A` is treated as unsupported. Verification rows
 remain in the CSV for audit but are excluded from quality calculations. It then
 divides the measurement budget (default 3000 readings) equally among the
 voltages whose flag is true. Measurement rows are classified with the normal
