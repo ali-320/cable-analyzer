@@ -41,6 +41,7 @@ from src.telemetry.models import Sample, SessionMeta
 from src.telemetry.sampler import Sampler
 from src.telemetry.session import SessionTracker
 from src.telemetry.storage import Storage
+from src.telemetry.remote import sync_pending
 from src.ui import cli
 
 
@@ -840,6 +841,18 @@ def main() -> int:
             storage.export_csv(sid, samples)
         meta.session_id = sid
         storage.save_verdict(sid, verdict, meta)
+        storage.enqueue_remote(sid)
+        remote_result = (
+            sync_pending(storage, cfg)
+            if cfg.get("remote", {}).get("sync_on_completion", True)
+            else {"attempted": 0, "completed": 0, "failed": 0, "pending": storage.remote_pending_count()}
+        )
+        if remote_result["attempted"]:
+            print(
+                "  remote sync: "
+                f"{remote_result['completed']} completed, "
+                f"{remote_result['pending']} pending"
+            )
         cli.print_verdict(verdict, as_json=args.json)
         return 0
     finally:

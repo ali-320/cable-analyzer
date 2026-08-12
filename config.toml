@@ -123,3 +123,16 @@ phone_charged_current_a = 0.03 # A; simulated full-phone maintenance current (0.
 
 [paths]
 data_dir = "data"
+
+[remote]
+# Remote sync is optional and never affects local acquisition/storage.
+enabled = true
+device_id = "pi-zero-2w-01"
+batch_size = 500
+timeout_s = 10.0
+max_retries = 2
+retry_base_s = 1.0
+sync_on_completion = true
+# The uploader loads SUPABASE_URL and SUPABASE_ANON_KEY (or
+# SUPABASE_PUBLISHABLE_KEY) from .env or the Pi environment.
+# Never store the service_role/secret key in this file.

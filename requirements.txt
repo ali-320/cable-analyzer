@@ -8,3 +8,4 @@
 # tomllib (config parsing) is stdlib on Python 3.11+ (Raspberry Pi OS Bookworm ships 3.11).
 
 pi-ina219>=0.2.3
+# Remote Supabase sync uses Python's standard-library HTTPS client.

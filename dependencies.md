@@ -255,7 +255,48 @@ OK
 
 ---
 
-## 5. Safety reminders (from DEVELOPMENT_PLAN.md §10)
+## 5. Supabase remote synchronization
+
+Remote synchronization keeps the local SQLite database and CSV files. It uploads
+completed sessions in bounded batches and never performs network requests inside
+the sensor sampling loop.
+
+On the Raspberry Pi, copy `.env.example` to `.env` and fill in the
+publishable key. The program loads `.env` automatically; shell variables, if
+set, take precedence:
+
+```bash
+cd ~/cable-analyzer
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+```dotenv
+SUPABASE_URL=https://mmkfbosprapnkelqprjg.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+DEVICE_ID=pi-zero-2w-01
+```
+
+`SUPABASE_ANON_KEY` is also accepted as an alternative key name. Do not put the
+`service_role` or secret key in `.env`.
+
+The publishable/anon key is used with the Supabase REST API and the RLS policies
+created for `pi-zero-2w-01`. Never use the `service_role` or secret key on the Pi.
+
+A normal completed run attempts synchronization automatically when
+`[remote].sync_on_completion = true`. To retry sessions that remained offline:
+
+```bash
+python -m scripts.sync_remote
+```
+
+The uploader reads from `data/sessions.db`, uploads the session first, then
+uploads sample rows in batches. A failed upload remains in the local
+`remote_queue` table and is retried later. Check the Supabase `sessions` and
+`samples` tables after a test run; `device_id` identifies this Pi.
+
+## 6. Safety reminders (from DEVELOPMENT_PLAN.md §10)
 - The current phone-inline setup measures phone current through the INA219, but it has no CH224K GPIO or phone-isolation protection. The manual probe checks support at 5/9/12 V, allocates readings across supported ranges, and uses a non-5 V fallback grade only with an explicit limitation/tag.
 - Never rely on the software prompt as protection when changing to 9/12 V; verify with a DMM and confirm the phone is rated for the selected voltage.
 - The current manual phone-inline test intentionally uses the phone as the load; begin at 5 V and stop immediately if voltage/current is abnormal.

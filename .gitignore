@@ -1,2 +1,7 @@
 data/processed/*.csv
+config.local.toml
+.env
+.env.*
+!.env.example
+remote.txt
 code_2.zip
