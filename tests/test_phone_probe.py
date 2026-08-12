@@ -81,6 +81,42 @@ class TestPhoneInlineProbe(unittest.TestCase):
             load.close()
             reader.shutdown()
 
+    def test_manual_probe_accepts_loaded_5v_rail_and_collects_samples(self):
+        """A loaded 5 V rail below 4.75 V still gets a support window.
+
+        The phone is inline with the INA219, so the initial rail check sees
+        the cable/fixture voltage drop before PROBE can collect samples.
+        """
+        state = SimState(
+            r_cable_ohm=0.25,
+            r_fixture_ohm=0.05,
+            v_noise=0.0,
+            i_noise=0.0,
+            current=1.2,
+            v_target=5.0,
+        )
+        cfg = _cfg(voltages=(5,))
+        cfg["probe"].update({
+            "manual_support_readings": 4,
+            "manual_total_readings": 5,
+            "manual_min_measurement_readings": 1,
+        })
+        reader = INA219Reader(cfg, simulate=True, sim_state=state)
+        ch224k = CH224KController(PinMap(), cfg, simulate=False, sim_state=state)
+        load = LoadController(PinMap(), cfg, simulate=False, sim_state=state)
+        try:
+            with patch("builtins.input", side_effect=["5", "5"]):
+                probe = run_probe(cfg, reader, ch224k, load, state)
+            self.assertLess(probe["manual_readings"][0]["support_v_mean"], 4.75)
+            self.assertTrue(probe["support_flags"]["5"])
+            self.assertEqual(probe["manual_readings"][0]["support_reason"], "current_in_VERIFICATION")
+            self.assertGreater(probe["manual_readings"][0]["support_n_valid"], 0)
+            self.assertTrue(probe.get("quality_features"))
+        finally:
+            ch224k.close()
+            load.close()
+            reader.shutdown()
+
     def test_manual_probe_recovers_when_rail_did_not_step_up(self):
         """A 12 V step that stays at 5 V is recorded as a rail mismatch."""
         state = SimState(current=0.5, v_target=5.0)

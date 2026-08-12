@@ -188,12 +188,14 @@ Verify every manual voltage with a DMM. The software cannot isolate the phone
 or protect it from an incorrect SEL setting because CH224K GPIO is not wired.
 
 **Voltage verification (manual mode):** because the phone is the load, a
-lossy cable pulls the rail below the requested PDO (e.g. 9 V target reads
-~8.4 V). The program accepts a rail that stepped up from the previous voltage
-within `ch224k.manual_verify_tolerance_v` (±1 V default) — it does **not**
-require the old tight ±5 % match. Only if the rail fails to step up at all
-(e.g. the phone rejected 12 V and VBUS stayed at ~5 V) does the program run
-the recovery-at-5 V check.
+lossy cable pulls the rail below the requested PDO (for example, a 5 V target
+may read below 4.75 V and a 9 V target may read ~8.4 V). The inline-phone
+workflow accepts each rail within `ch224k.manual_verify_tolerance_v` (±1 V by
+default). For 5 V this is a loaded-rail presence check; the later quality
+features measure the voltage drop and grade the cable. For 9/12 V the rail must
+also step up by `manual_verify_min_step_v` (0.5 V by default). Only if a higher
+rail fails to step up at all (for example, the phone rejected 12 V and VBUS
+stayed at ~5 V) does the program run the recovery-at-5 V check.
 
 
 ### Step 2 — full test (legacy protected wiring)

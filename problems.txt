@@ -47,6 +47,11 @@ Now it supports the CHARGED state as well.
 9. I ran the code in charge mode, it got into the CHARGING state, after which the current remained in the CHARGED state for
 quite a while, but it never went to the charged state.
 
+10. In PROBE mode, the 5V verfiication test is making the 5V false unnecessarily while giving the reason of the rail_not_verified.
+[CAUSE]
+In PROBE mode the voltage check for the 5V is within +-0.25V. The voltage at 4.6 therefore it said that the rail is not verified.
+[DONE]
+Made the first verification of 5V within the range of +-1V.
 
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
@@ -63,3 +68,6 @@ CHARGING, CHARGED, NO-PHONE, and IDLE.
 The IDLE checking state should be replaced by a state name checking that gives the value of the flags.
 [DONE]
 The IDLE name has been replaced by the VERIFICATION name.
+
+11. Configure on a local database on the laptop and add a functionality that the Raspberry pi zero 2W is able to send 
+data to the database.

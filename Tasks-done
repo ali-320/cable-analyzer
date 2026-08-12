@@ -21,3 +21,9 @@ Now it shows CHARGING, IDLE, AND CHARGED mode in PROBE mdoe as well.
 10. Added the functionality of ignoring un-necessary interrupts, such that when the mobile is disconnected, and ignoring 
 the faulty state readings caused by the debounce time.
 11. Added the CHARGED state support in the VERIFICATION step of the --mode probe.
+12. Removed the IDLE state.
+13. Enabled the debounce time state checking.
+
+
+# 12th Aug
+1. Set the range of the initial 5V to +-1V so that the first VERIFICATION of 5V is passed successfully.

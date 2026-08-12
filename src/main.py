@@ -213,12 +213,15 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         v_check, _, _, ok = reader.read_sample(time.monotonic())
         if not ok or math.isnan(v_check) or v_check < 1.0:
             return False
-        if target_v == 5:
-            verified = abs(v_check - target_v) <= verify_tol * target_v
-        else:
-            verified = abs(v_check - target_v) <= manual_verify_tol_v
-            if require_step:
-                verified = verified and v_check >= last_verified_v + manual_verify_min_step_v
+        # In the inline-phone manual wiring, the phone is already loading
+        # VBUS while the rail is verified. Apply the manual loaded-rail
+        # tolerance to 5 V as well; the old GPIO-style +/-5% check rejected
+        # legitimate loaded readings below 4.75 V and skipped the entire
+        # verification window. Quality features still measure the resulting
+        # voltage drop and grade the cable, so this is only a presence check.
+        verified = abs(v_check - target_v) <= manual_verify_tol_v
+        if target_v != 5 and require_step:
+            verified = verified and v_check >= last_verified_v + manual_verify_min_step_v
         if verified:
             last_verified_v = float(target_v)
         return verified
@@ -320,6 +323,7 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         support_observations[str(v)] = "current_observed" if supports else "no_current_observed"
         record.update({
             "supports_voltage": supports,                "support_reason": "current_in_VERIFICATION" if supports else "no_current_in_VERIFICATION",
+            "support_v_mean": round(sum(s.voltage for s in valid) / len(valid), 3) if valid else 0.0,
             "support_i_mean": round(sum(s.current for s in valid) / len(valid), 4) if valid else 0.0,
             "support_current_min_a": i_support_min,
             "support_active_fraction": round(active_fraction, 3),
@@ -482,17 +486,20 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
 
         GPIO mode keeps the strict relative tolerance. Manual mode accepts
         a rail pulled down by the phone's load (within ``manual_verify_tolerance_v``
-        of the target) as long as it also stepped up from the previous rail by
-        ``manual_verify_min_step_v`` — this detects the 5 -> 9 -> 12 V step
-        even when cable loss leaves VBUS below the requested PDO.
+        of the target). The 5 V quality rail does not need a step-up check;
+        9 V and 12 V must also clear ``manual_verify_min_step_v`` so a rail
+        that stayed at 5 V is not mistaken for a successful higher-voltage step.
         """
         if not ok or math.isnan(v_check) or v_check < 1.0:
             return False
-        if not manual or v_target <= 5.0:
-            # 5 V is the quality dataset; keep the strict relative check so a
-            # broken fixture/charging rail is caught, not silently graded.
+        if not manual:
             return abs(v_check - v_target) <= verify_tol * v_target
+        # The phone is inline in manual mode, so 5 V can also sag under load.
+        # Keep rail presence separate from cable quality: the later feature
+        # calculation measures and grades the voltage drop.
         within_target = abs(v_check - v_target) <= manual_verify_tol_v
+        if v_target <= 5.0:
+            return within_target
         stepped_up = v_check >= last_verified_v + manual_verify_min_step_v
         return within_target and stepped_up
 
