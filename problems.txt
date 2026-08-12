@@ -44,7 +44,7 @@ Now it supports the CHARGED state as well.
 
 
 
-9. I ran the code in charge mode, it got into the CHARGING state, after which the curren remained in the CHARGED state for
+9. I ran the code in charge mode, it got into the CHARGING state, after which the current remained in the CHARGED state for
 quite a while, but it never went to the charged state.
 
 
