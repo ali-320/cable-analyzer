@@ -152,3 +152,54 @@ B. Retroactive debounce-state labeling
 
 3. Validation
    All modified Python files compiled successfully. The final complete test suite ran 67 tests with 0 failures and 0 errors.
+
+
+C. Remote Supabase cloud database synchronization
+-------------------------------------------------
+
+1. Prompt given
+   Add cloud synchronization for completed cable-analyzer sessions while retaining the local SQLite database and CSV files as the authoritative local record. Configure the Raspberry Pi to upload session metadata and measurement samples to Supabase, identify the source device, support offline retry, load credentials from an uncommitted `.env` file, and protect the database with insert-only RLS policies.
+
+2. Changed files and abstract logic
+
+   a. cable-analyzer/src/telemetry/remote.py — created, lines 1–234.
+      Abstract logic: Adds a dependency-free Supabase REST client, loads credentials without overriding shell configuration, maps local sessions and samples to the cloud schema, uploads bounded sample batches, preserves local data when remote requests fail, retries failed requests, and marks queued sessions complete only after all uploads succeed. The request response preference was changed at line 94 to remain compatible with insert-only RLS policies instead of using conflict-resolution behavior that caused valid inserts to be rejected.
+
+   b. cable-analyzer/src/telemetry/storage.py
+      Lines 1, 25–43, and 138–204.
+      Abstract logic: Extends local SQLite storage with a durable remote outbox, pending-session lookup, retry timing, failure details, completion tracking, and remote-pending counts without changing the local session or CSV record as the primary source.
+
+   c. cable-analyzer/src/main.py
+      Lines 44 and 844–855.
+      Abstract logic: Enqueues each completed session for remote delivery, optionally synchronizes immediately according to configuration, and reports the remote completion and pending counts without interrupting verdict generation.
+
+   d. cable-analyzer/scripts/sync_remote.py — created, lines 1–56.
+      Abstract logic: Adds a command-line retry utility that reads the local outbox, uploads pending sessions, reports failures, distinguishes unavailable credentials from deferred retries, and closes local storage safely.
+
+   e. cable-analyzer/config.toml
+      Lines 127–138.
+      Abstract logic: Adds remote-sync settings for enablement, device identity, batch size, request timeout, retry limits, retry delay, automatic post-run synchronization, and credential-source documentation.
+
+   f. cable-analyzer/.env.example — created, lines 1–6.
+      Abstract logic: Provides a safe credentials template containing the Supabase endpoint, accepted public key variables, and the Raspberry Pi device identity while explicitly excluding secret service credentials.
+
+   g. cable-analyzer/tests/test_remote.py — created, lines 1–192.
+      Abstract logic: Covers environment-file loading and precedence, client construction, session/sample payload mapping, bounded uploads, durable failure and retry behavior, required request authentication, duplicate-safe request construction, and successful completion of the local outbox.
+
+   h. cable-analyzer/dependencies.md
+      Lines 258–297.
+      Abstract logic: Documents Supabase project setup, protected credential handling, Raspberry Pi configuration, automatic synchronization, manual retry operation, local outbox behavior, and verification of uploaded sessions and samples.
+
+   i. cable-analyzer/requirements.txt
+      Line 11.
+      Abstract logic: Documents that remote synchronization uses the Python standard library and does not require an additional HTTP client dependency.
+
+   j. cable-analyzer/.gitignore
+      Lines 3–4.
+      Abstract logic: Prevents local environment credentials and environment-specific configuration from being committed while retaining the example template.
+
+   k. Supabase project configuration (external to the repository)
+      Abstract logic: Created `sessions` and `samples` insert permissions and device-specific anonymous RLS policies, using the Raspberry Pi identity `pi-zero-2w-01`; the policies retain local/cloud separation and reject rows from other device identities.
+
+3. Validation
+   Direct Supabase insertion and the complete sync-style session upload succeeded with the anonymous key and device-specific RLS policies; local CSV/SQLite storage and cloud sample delivery were both confirmed.

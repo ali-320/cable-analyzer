@@ -69,5 +69,9 @@ The IDLE checking state should be replaced by a state name checking that gives t
 [DONE]
 The IDLE name has been replaced by the VERIFICATION name.
 
-11. Configure on a local database on the laptop and add a functionality that the Raspberry pi zero 2W is able to send 
+4. Configure on a local database on the laptop and add a functionality that the Raspberry pi zero 2W is able to send 
 data to the database.
+[DONE]
+Instead of configuring a local database I configured a Supbase to test that if remote data sending is possible or not.
+
+5. The AI model could analyze the verdict and then just give future recommendations.
