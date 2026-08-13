@@ -89,8 +89,8 @@ class SupabaseRestClient:
                 "apikey": self.api_key,
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                # Duplicate retries are ignored rather than updating rows.
-                # This works with the insert-only RLS policies used by the Pi.
+                # Return no row body so insert-only RLS policies do not need
+                # response-read privileges.
                 "Prefer": "return=minimal",
             },
         )

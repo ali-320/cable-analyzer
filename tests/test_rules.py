@@ -39,6 +39,16 @@ class TestGrades(unittest.TestCase):
             self.assertIn(key, v)
         self.assertEqual(v["grade"], "B")
 
+    def test_no_zero_confidence_from_noisy_long_measurement(self):
+        # Raw spread may exceed the mean after fixture subtraction, but a long
+        # dataset can still provide a useful estimate of its mean resistance.
+        features = base_features(r_mean=0.05)
+        features["r_std"] = 0.10
+        features["r_dvdi"] = None
+        features["n_busy"] = 400
+        verdict = evaluate(features, dict(META), CFG)
+        self.assertGreater(verdict["confidence"], 0.0)
+
     def test_no_source_verdict(self):
         v = evaluate(None, {"session_id": "T2", "v_present": False, "phone_expected": False}, CFG)
         self.assertEqual(v["verdict"], "NO_SOURCE")

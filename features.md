@@ -297,17 +297,20 @@ These four are not engineered features; they are bookkeeping fields the verdict 
 
 ## Confidence formula (consumer of these features)
 
-`rules.py::evaluate()` consumes `r_mean`, `r_std`, `r_dvdi` and `valid_frac` to compute confidence:
+`rules.py::evaluate()` consumes `r_mean`, `r_std`, `r_dvdi`, `n_busy` and `valid_frac` to compute confidence:
 
 ```text
-conf  = valid_frac · max(0, 1 − r_std / max(r_mean, 1e-6))
+r_se  = r_std / sqrt(max(n_busy, 1))
+scale = max(abs(r_mean), 0.02)
+repeatability = 1 / (1 + r_se / scale)
+conf  = valid_frac · repeatability
 if r_dvdi is not None AND r_mean > 0:
     agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, 0.02))
-    conf  = 0.6 · conf  +  0.4 · max(0, agree)
+    conf  = 0.6 · conf + 0.4 · max(0, agree)
 confidence = clip(conf, 0, 1)
 ```
 
-So the engineered features 1, 2, 6, 21, and 22 directly drive what `verdict.confidence` reports.
+So the engineered features 1, 2, 6, 20, 21, and 22 directly drive what `verdict.confidence` reports.
 
 ---
 

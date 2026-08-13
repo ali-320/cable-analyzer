@@ -184,7 +184,7 @@ class TestRemoteSync(unittest.TestCase):
         self.assertIn("on_conflict=session_id%2Csample_index", request.full_url)
         self.assertEqual(request.get_header("Apikey"), "public-test-key")
         self.assertEqual(request.get_header("Authorization"), "Bearer public-test-key")
-        self.assertIn("ignore-duplicates", request.get_header("Prefer"))
+        self.assertEqual(request.get_header("Prefer"), "return=minimal")
         self.assertEqual(json.loads(request.data.decode("utf-8"))[0]["sample_index"], 0)
 
 

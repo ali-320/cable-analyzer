@@ -193,7 +193,17 @@ def evaluate(
         evidence.append("R spread across load steps > 30% of mean (non-linear contact)")
 
     # --- 5. confidence ---
-    conf = features["valid_frac"] * max(0.0, 1.0 - features["r_std"] / max(r_mean, 1e-6))
+    # r_std describes the spread of individual readings, not the uncertainty
+    # of the estimated mean. Using it directly made a long, mildly noisy
+    # session report zero confidence whenever r_std exceeded r_mean. Use the
+    # standard error instead so more busy samples improve confidence while
+    # preserving a penalty for genuinely unstable resistance measurements.
+    n_busy = max(1, int(features.get("n_busy", 1)))
+    resistance_se = features["r_std"] / (n_busy ** 0.5)
+    resistance_scale = max(abs(r_mean), 0.02)
+    relative_error = resistance_se / resistance_scale
+    repeatability = 1.0 / (1.0 + relative_error)
+    conf = features["valid_frac"] * repeatability
     if features.get("r_dvdi") is not None and r_mean > 0:
         agree = 1.0 - min(1.0, abs(r_mean - features["r_dvdi"]) / max(r_mean, 0.02))
         conf = 0.6 * conf + 0.4 * max(0.0, agree)

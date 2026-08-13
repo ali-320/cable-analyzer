@@ -61,6 +61,12 @@ class TestFeatures(unittest.TestCase):
         f = compute_features(samples, v_target=5.0, min_busy_samples=5)
         self.assertIsNone(f)
 
+    def test_probe_samples_are_included_after_idle_removal(self):
+        samples = make_samples(state="PROBE", n=20)
+        features = compute_features(samples, v_target=5.0)
+        self.assertIsNotNone(features)
+        self.assertEqual(features["n_busy"], 20)
+
     def test_verification_samples_are_excluded_from_features(self):
         verification = [
             Sample(t=k * 0.04, voltage=4.0, current=1.0, power=4.0, state="VERIFICATION")

@@ -100,10 +100,13 @@ The overrides live in `_force_grade()` and follow a *worst-of* rule: they can on
 
 ### 3.4 Features that drive confidence (only `verdict.confidence`, never the letter)
 
-`rules.py::evaluate()` reports `verdict.confidence` from **features #1 `r_mean`, #2 `r_std`, #6 `r_dvdi`, #21 `valid_frac`** (plus the implicit sample-span check). See the *Confidence formula* section at the bottom of `features.md`:
+`rules.py::evaluate()` reports `verdict.confidence` from **features #1 `r_mean`, #2 `r_std`, #6 `r_dvdi`, #20 `n_busy`, and #21 `valid_frac`** (plus the implicit sample-span check). See the *Confidence formula* section at the bottom of `features.md`:
 
 ```text
-conf  = valid_frac · max(0, 1 − r_std / max(r_mean, 1e-6))
+r_se  = r_std / sqrt(max(n_busy, 1))
+scale = max(abs(r_mean), 0.02)
+repeatability = 1 / (1 + r_se / scale)
+conf  = valid_frac · repeatability
 if r_dvdi is not None and r_mean > 0:
     agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, 0.02))
     conf  = 0.6 · conf + 0.4 · max(0, agree)
