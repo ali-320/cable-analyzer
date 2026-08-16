@@ -104,7 +104,7 @@ def compute_features(
 
     ts = [s.t for s in busy]
     slope_v_i, _, _ = linreg(is_, vs)              # V vs I -> slope ≈ -R_loop
-    r_dvdi = max(0.0, -slope_v_i) if slope_v_i < 0 else None
+    r_dvdi = max(0.0, -slope_v_i - r_fixture) if slope_v_i < 0 else None
 
     # sigma_V = min detrended std over a sliding ~10 s sub-window of the busy
     # samples. The phone's CC->CV taper is a slow, near-linear V rise: a single
@@ -210,4 +210,88 @@ def compute_features(
         "v_target": v_target,
         "r_fixture": r_fixture,
         "length_m": length_m,
+    }
+
+
+def combine_features(
+    feature_sets: list[dict],
+    reference_voltage: float | None = None,
+) -> dict | None:
+    """Combine independently calculated feature sets from supported voltages.
+
+    Each set must already have been calculated with its own ``v_target``.
+    Resistance and quality statistics are combined with sample-count weights;
+    resistance spread uses pooled variance so one voltage does not dominate
+    merely because its readings have a different voltage baseline.
+    """
+    sets = [f for f in feature_sets if f]
+    if not sets:
+        return None
+
+    counts = [max(1, int(f.get("n_busy", 0))) for f in sets]
+    total_busy = sum(counts)
+    r_mean = sum(n * f["r_mean"] for n, f in zip(counts, sets)) / total_busy
+    pooled_variance = sum(
+        max(0, n - 1) * f["r_std"] ** 2 + n * (f["r_mean"] - r_mean) ** 2
+        for n, f in zip(counts, sets)
+    ) / max(total_busy - 1, 1)
+
+    total_samples = sum(max(0, int(f.get("n_total", 0))) for f in sets)
+    valid_samples = sum(
+        max(0, int(f.get("n_total", 0))) * f.get("valid_frac", 0.0)
+        for f in sets
+    )
+    weighted = lambda key: sum(n * f[key] for n, f in zip(counts, sets)) / total_busy
+    slope_sets = [f for f in sets if f.get("r_dvdi") is not None]
+    slope_counts = [max(1, int(f.get("n_busy", 0))) for f in slope_sets]
+    slope_total = sum(slope_counts)
+    r_dvdi = (
+        sum(n * f["r_dvdi"] for n, f in zip(slope_counts, slope_sets)) / slope_total
+        if slope_sets else None
+    )
+    slope_values = [f for f in sets if f.get("dV_dI_slope") is not None]
+    d_v_d_i_slope = (
+        sum(n * f["dV_dI_slope"] for n, f in zip(
+            [max(1, int(f.get("n_busy", 0))) for f in slope_values], slope_values
+        )) / sum(max(1, int(f.get("n_busy", 0))) for f in slope_values)
+        if slope_values else 0.0
+    )
+    reference = next(
+        (f for f in sets if reference_voltage is not None and f.get("v_target") == reference_voltage),
+        sets[0],
+    )
+    idle_sets = [f for f in sets if f.get("idle_I") is not None]
+    idle_counts = [max(1, int(f.get("n_total", 0))) for f in idle_sets]
+    idle_i = (
+        sum(n * f["idle_I"] for n, f in zip(idle_counts, idle_sets)) / sum(idle_counts)
+        if idle_sets else None
+    )
+
+    return {
+        "r_mean": r_mean,
+        "r_std": pooled_variance ** 0.5,
+        "r_max": max(f["r_max"] for f in sets),
+        "r_p95": max(f["r_p95"] for f in sets),
+        "r_p5": min(f["r_p5"] for f in sets),
+        "r_dvdi": r_dvdi,
+        "dV_dI_slope": d_v_d_i_slope,
+        "r_loop_mean": sum(n * f["r_loop_mean"] for n, f in zip(counts, sets)) / total_busy,
+        "sigma_V": max(f["sigma_V"] for f in sets),
+        "V_min": reference["V_min"],
+        "eta": weighted("eta"),
+        "mean_I": weighted("mean_I"),
+        "max_I": max(f["max_I"] for f in sets),
+        "mean_P_loss": weighted("mean_P_loss"),
+        "E_wh": sum(f["E_wh"] for f in sets),
+        "dR_dt_mOhm_per_min": max(f["dR_dt_mOhm_per_min"] for f in sets),
+        "interruption_frac": weighted("interruption_frac"),
+        "spike_count": sum(f["spike_count"] for f in sets),
+        "idle_I": idle_i,
+        "n_busy": total_busy,
+        "n_total": total_samples,
+        "valid_frac": (valid_samples / total_samples) if total_samples else 0.0,
+        "duration_s": sum(f["duration_s"] for f in sets),
+        "v_target": reference["v_target"],
+        "r_fixture": reference["r_fixture"],
+        "length_m": reference["length_m"],
     }

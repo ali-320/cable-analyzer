@@ -8,7 +8,7 @@ Things to understand
 
 > [!INFO] Answer
 > Yes, charge mode still exists.
->- **Probe mode:** Tests cable quality. It collects many 5 V readings, checks 9 V/12 V compatibility, and calculates the rule-based grade. Higher-voltage unsupported readings are excluded.
+>- **Probe mode:** Tests cable quality. It collects readings at supported 5 V/9 V/12 V ranges, excludes unsupported ranges, and combines all supported-voltage datasets for the rule-based grade.
 >- **Charge mode:** Monitors the phone continuously at the selected voltage—usually 5 V—to determine whether it is charging, interrupted, disconnected, or fully charged. It does not grade cable quality.
 >
 >To run it on the terminal you will use the following command:

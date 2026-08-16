@@ -49,6 +49,7 @@ def _save_calibration(cfg: dict, *, method: str, rows: list[dict],
         "method": method,
         "steps": rows,
         "r_fixture_mean_mohm": round(mean_mohm, 1),
+        "r_fixture_ohm": round(mean_mohm / 1000.0, 6),
         "note": note,
         **extra,
     }
@@ -57,6 +58,35 @@ def _save_calibration(cfg: dict, *, method: str, rows: list[dict],
     out.write_text(json.dumps(cal, indent=2))
     return out
 
+
+def _estimate_confidence_floor(cfg: dict, feature_sets: list[dict]) -> tuple[float, float]:
+    """Estimate the confidence resistance floor from one calibration run.
+
+    ``r_std`` is the sample-to-sample resistance noise estimate. When several
+    controlled current steps are available, their variances and means are
+    pooled before applying the configured sigma multiplier.
+    """
+    sets = [feature for feature in feature_sets if feature]
+    if not sets:
+        raise ValueError("at least one feature set is required")
+    counts = [max(1, int(feature.get("n_busy", 0))) for feature in sets]
+    total = sum(counts)
+    r_mean = sum(n * feature["r_mean"] for n, feature in zip(counts, sets)) / total
+    variance = sum(
+        max(0, n - 1) * feature["r_std"] ** 2
+        + n * (feature["r_mean"] - r_mean) ** 2
+        for n, feature in zip(counts, sets)
+    ) / max(total - 1, 1)
+    noise_sigma = variance ** 0.5
+    multiplier = float(cfg["calibration"]["confidence_floor_sigma_multiplier"])
+    return multiplier * noise_sigma, noise_sigma
+
+
+def _calibration_report_values(cfg: dict, feature_sets: list[dict]) -> tuple[float, float, float]:
+    """Return estimated floor, measured noise sigma, and configured floor."""
+    estimated, noise_sigma = _estimate_confidence_floor(cfg, feature_sets)
+    configured = float(cfg["rules"]["confidence_resistance_floor_ohm"])
+    return estimated, noise_sigma, configured
 
 def _manual_passive_calibration(
     cfg: dict,
@@ -142,6 +172,7 @@ def _manual_passive_calibration(
         print("   Fix the charger, reference cable, or wiring before saving a baseline.")
         return 1, None, None
     r_loop_mohm = feat["r_mean"] * 1000.0
+    estimated_floor, noise_sigma, configured_floor = _calibration_report_values(cfg, [feat])
     row = {
         "mode": "manual_phone_load",
         "i_mean_a": round(mean_i, 4),
@@ -172,8 +203,15 @@ def _manual_passive_calibration(
         reference_current_min_a=round(min(s.current for s in busy), 4),
         reference_current_max_a=round(max(s.current for s in busy), 4),
         reference_voltage_v=round(mean_v, 4),
+        resistance_noise_sigma_ohm=round(noise_sigma, 6),
+        confidence_resistance_floor_ohm=round(estimated_floor, 6),
+        configured_confidence_resistance_floor_ohm=round(configured_floor, 6),
     )
     print(f"\n  R_fixture/reference baseline = {r_loop_mohm:.1f} mOhm  ->  saved to {out}")
+    print(f"  resistance noise sigma = {noise_sigma:.6f} Ohm")
+    print(f"  confidence_resistance_floor_ohm = {estimated_floor:.6f} Ohm")
+    print(f"  configured floor currently used by rules = {configured_floor:.6f} Ohm")
+    print("  Set [rules].confidence_resistance_floor_ohm to the calibrated value if desired.")
     print("  main.py will subtract this baseline from later cable measurements automatically.")
     return 0, r_loop_mohm, out
 
@@ -203,6 +241,7 @@ def _controlled_load_calibration(
         return 1, None, None
 
     rows = []
+    feature_sets = []
     for target_i in steps:
         if target_i > float(cfg.get("load", {}).get("max_probe_amps", 2.5)):
             continue
@@ -215,6 +254,7 @@ def _controlled_load_calibration(
             print(f"!! not enough valid samples at {target_i} A - check wiring")
             continue
         r_loop_mohm = feat["r_mean"] * 1000.0
+        feature_sets.append(feat)
         rows.append({"i_a": target_i, "r_loop_mohm": round(r_loop_mohm, 1), "n": feat["n_busy"]})
         print(f"  I={target_i:>4.2f} A   R_loop(reference) = {r_loop_mohm:>7.1f} mOhm   V_load={feat['V_min']:.3f} V")
 
@@ -223,14 +263,22 @@ def _controlled_load_calibration(
         return 1, None, None
 
     mean_mohm = sum(r["r_loop_mohm"] for r in rows) / len(rows)
+    estimated_floor, noise_sigma, configured_floor = _calibration_report_values(cfg, feature_sets)
     out = _save_calibration(
         cfg,
         method="known-good reference cable with controlled e-load steps at 5 V",
         rows=rows,
         mean_mohm=mean_mohm,
         note="verify V_load at each current with a DMM; baseline includes the fitted reference cable and fixture path",
+        resistance_noise_sigma_ohm=round(noise_sigma, 6),
+        confidence_resistance_floor_ohm=round(estimated_floor, 6),
+        configured_confidence_resistance_floor_ohm=round(configured_floor, 6),
     )
     print(f"\n  R_fixture/reference baseline = {mean_mohm:.1f} mOhm  ->  saved to {out}")
+    print(f"  resistance noise sigma = {noise_sigma:.6f} Ohm")
+    print(f"  confidence_resistance_floor_ohm = {estimated_floor:.6f} Ohm")
+    print(f"  configured floor currently used by rules = {configured_floor:.6f} Ohm")
+    print("  Set [rules].confidence_resistance_floor_ohm to the calibrated value if desired.")
     print("  main.py will subtract this baseline from later cable measurements automatically.")
     return 0, mean_mohm, out
 

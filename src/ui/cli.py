@@ -128,6 +128,14 @@ def print_verdict(verdict: dict, as_json: bool = False) -> None:
         print(f"  verdict   : {verdict.get('verdict', '')}")
         print(f"  grade     : {verdict.get('grade')}")
         print(f"  confidence: {verdict.get('confidence')}")
+        confidence_details = verdict.get("confidence_details") or {}
+        if confidence_details:
+            print("  confidence details:")
+            for key in (
+                "r_mean", "r_dvdi", "n_busy", "r_std", "scale",
+                "confidence_base", "agreement", "voltage_penalty",
+            ):
+                print(f"    {key}: {confidence_details.get(key)}")
         tags = verdict.get("tags") or []
         print(f"  tags      : {', '.join(tags) if tags else '-'}")
         for line in verdict.get("evidence", []):

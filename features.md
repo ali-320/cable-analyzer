@@ -84,15 +84,17 @@ r_p5  = percentile(r_cable, 5)                  (same interpolation as r_p95 wit
 
 ### 6. `r_dvdi` — resistance estimated from voltage-vs-current regression
 
-Linear least-squares fit `V = a + b·I` over the busy samples. The slope `b` should be negative for a resistive load (more current → more droop). The code returns the magnitude:
+For each supported target voltage, the program fits `V = a + b·I` over that voltage's busy samples. The slope `b` should be negative for a resistive load (more current → more droop). The calibrated cable estimate is:
 
 ```text
 slope_b = Σ((I[i] − Ī)·(V[i] − V̄))  /  Σ((I[i] − Ī)²)
-r_dvdi  = max(0, −slope_b)   if slope_b < 0
-r_dvdi  = None               if slope_b ≥ 0
+r_dvdi  = max(0, −slope_b − r_fixture)   if slope_b < 0
+r_dvdi  = None                            if slope_b ≥ 0
 ```
 
-Units: Ω. Independent of `r_fixture` subtraction — a corroborating measurement of resistance from the V/I slope rather than from a per-sample Ohm's-law division.
+When several voltage support flags are true, the per-voltage `r_dvdi` values are combined using busy-sample weights. Raw 5 V, 9 V, and 12 V voltage readings are never placed in one regression because their voltage baselines differ.
+
+Units: Ω. This is a corroborating resistance estimate from the V/I slope rather than from per-sample Ohm's-law division.
 
 ### 7. `dV_dI_slope` — raw V-vs-I regression slope
 
@@ -301,11 +303,11 @@ These four are not engineered features; they are bookkeeping fields the verdict 
 
 ```text
 r_se  = r_std / sqrt(max(n_busy, 1))
-scale = max(abs(r_mean), 0.02)
+scale = max(abs(r_mean), confidence_resistance_floor_ohm)
 repeatability = 1 / (1 + r_se / scale)
 conf  = valid_frac · repeatability
 if r_dvdi is not None AND r_mean > 0:
-    agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, 0.02))
+    agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, confidence_resistance_floor_ohm))
     conf  = 0.6 · conf + 0.4 · max(0, agree)
 confidence = clip(conf, 0, 1)
 ```
@@ -323,7 +325,7 @@ So the engineered features 1, 2, 6, 20, 21, and 22 directly drive what `verdict.
 | 3 | `r_max` | `max(r_cable)` | Ω |
 | 4 | `r_p95` | `percentile(r_cable, 95)` | Ω |
 | 5 | `r_p5`  | `percentile(r_cable, 5)`  | Ω |
-| 6 | `r_dvdi` | `max(0, −slope(V vs I))` | Ω |
+| 6 | `r_dvdi` | `max(0, −slope(V vs I) − r_fixture)` per voltage, then weighted across supported voltages | Ω |
 | 7 | `dV_dI_slope` | raw slope of V vs I | Ω |
 | 8 | `r_loop_mean` | `mean(max(0, (v_target − V)/I))` | Ω |
 | 9 | `sigma_V` | `min` std of detrended V over sliding ~10 s windows | V |

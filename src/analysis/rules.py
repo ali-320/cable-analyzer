@@ -170,11 +170,11 @@ def evaluate(
     if reference_v and int(reference_v) != 5:
         tags.append("FALLBACK_VOLTAGE_REFERENCE")
         base["limitations"].append(
-            "quality reference used a non-5 V range; compare with same-voltage calibration before treating the grade as universal"
+            "a non-5 V range was the display reference; all supported voltage datasets were combined, but compare with same-voltage calibration before treating the grade as universal"
         )
         confidence_penalty = 0.85
         evidence.append(
-            f"5 V support flag was false; quality reference used {int(reference_v)} V instead"
+            f"5 V support flag was false; supported-voltage data was combined with {int(reference_v)} V as the display reference"
         )
     else:
         confidence_penalty = 1.0
@@ -192,6 +192,11 @@ def evaluate(
         tags.append("NON_LINEAR")
         evidence.append("R spread across load steps > 30% of mean (non-linear contact)")
 
+    # Grade overrides above can change the letter after the initial resistance
+    # classification. Recompute the descriptive label so the pair stays in
+    # sync (for example, D must always be Poor, never Excellent).
+    label = GRADE_LABELS[grade]
+
     # --- 5. confidence ---
     # r_std describes the spread of individual readings, not the uncertainty
     # of the estimated mean. Using it directly made a long, mildly noisy
@@ -200,20 +205,33 @@ def evaluate(
     # preserving a penalty for genuinely unstable resistance measurements.
     n_busy = max(1, int(features.get("n_busy", 1)))
     resistance_se = features["r_std"] / (n_busy ** 0.5)
-    resistance_scale = max(abs(r_mean), 0.02)
+    resistance_floor = float(rules["confidence_resistance_floor_ohm"])
+    resistance_scale = max(abs(r_mean), resistance_floor)
     relative_error = resistance_se / resistance_scale
     repeatability = 1.0 / (1.0 + relative_error)
-    conf = features["valid_frac"] * repeatability
+    confidence_base = features["valid_frac"] * repeatability
+    agreement = None
+    confidence_before_penalty = confidence_base
     if features.get("r_dvdi") is not None and r_mean > 0:
-        agree = 1.0 - min(1.0, abs(r_mean - features["r_dvdi"]) / max(r_mean, 0.02))
-        conf = 0.6 * conf + 0.4 * max(0.0, agree)
-    confidence = max(0.0, min(1.0, conf * confidence_penalty))
+        agreement = 1.0 - min(1.0, abs(r_mean - features["r_dvdi"]) / max(r_mean, resistance_floor))
+        confidence_before_penalty = 0.6 * confidence_base + 0.4 * max(0.0, agreement)
+    confidence = max(0.0, min(1.0, confidence_before_penalty * confidence_penalty))
 
     base.update(
         verdict=f"Grade {grade}: {label}",
         grade=grade,
         tags=sorted(set(tags)),
         confidence=round(confidence, 3),
+        confidence_details={
+            "r_mean": round(r_mean, 6),
+            "r_dvdi": round(features["r_dvdi"], 6) if features.get("r_dvdi") is not None else None,
+            "n_busy": n_busy,
+            "r_std": round(features["r_std"], 6),
+            "scale": round(resistance_scale, 6),
+            "confidence_base": round(confidence_base, 6),
+            "agreement": round(agreement, 6) if agreement is not None else None,
+            "voltage_penalty": confidence_penalty,
+        },
         evidence=evidence,
     )
     return base

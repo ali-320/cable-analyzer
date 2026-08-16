@@ -75,6 +75,7 @@ class TestPhoneInlineProbe(unittest.TestCase):
             self.assertEqual(probe.get("unsupported_voltages"), [])
             self.assertEqual(probe.get("support_flags"), {"5": True, "9": True, "12": True})
             self.assertEqual(probe.get("measurement_allocations"), {"5": 1000, "9": 1000, "12": 1000})
+            self.assertGreater(probe["quality_features"]["n_busy"], 1000)
             self.assertEqual(len(probe.get("manual_readings", [])), 3)
         finally:
             ch224k.close()
@@ -166,6 +167,7 @@ class TestPhoneInlineProbe(unittest.TestCase):
             self.assertEqual(probe["support_flags"], {"5": False, "9": True, "12": True})
             self.assertEqual(probe["measurement_allocations"], {"9": 40, "12": 40})
             self.assertEqual(probe["quality_reference_voltage"], 9)
+            self.assertEqual(probe["quality_features"]["n_busy"], 80)
             self.assertIsNotNone(probe.get("quality_features"))
         finally:
             ch224k.close()

@@ -3,7 +3,7 @@ import unittest
 
 from src.analysis.rules import evaluate, grade_from_r
 
-CFG = {"rules": {"grade_limits_mohm": [150, 250, 300, 500], "sigma_v_marginal_mv": 25.0}}
+CFG = {"rules": {"grade_limits_mohm": [150, 250, 300, 500], "sigma_v_marginal_mv": 25.0, "confidence_resistance_floor_ohm": 0.02}}
 
 
 def base_features(r_mean: float = 0.2, sigma_v: float = 0.004, drdt: float = 0.0,
@@ -38,6 +38,20 @@ class TestGrades(unittest.TestCase):
         for key in ("verdict", "grade", "tags", "confidence", "evidence", "limitations", "session_id"):
             self.assertIn(key, v)
         self.assertEqual(v["grade"], "B")
+        details = v["confidence_details"]
+        self.assertAlmostEqual(details["r_mean"], 0.2, places=6)
+        self.assertAlmostEqual(details["r_dvdi"], 0.2, places=6)
+        self.assertEqual(details["n_busy"], 100)
+        self.assertAlmostEqual(details["r_std"], 0.004, places=6)
+        self.assertAlmostEqual(details["scale"], 0.2, places=6)
+        self.assertAlmostEqual(details["agreement"], 1.0, places=6)
+        self.assertEqual(details["voltage_penalty"], 1.0)
+
+    def test_confidence_uses_configured_resistance_floor(self):
+        features = base_features(r_mean=0.005)
+        cfg = {"rules": {**CFG["rules"], "confidence_resistance_floor_ohm": 0.03}}
+        verdict = evaluate(features, dict(META), cfg)
+        self.assertAlmostEqual(verdict["confidence_details"]["scale"], 0.03, places=6)
 
     def test_no_zero_confidence_from_noisy_long_measurement(self):
         # Raw spread may exceed the mean after fixture subtraction, but a long
@@ -48,6 +62,9 @@ class TestGrades(unittest.TestCase):
         features["n_busy"] = 400
         verdict = evaluate(features, dict(META), CFG)
         self.assertGreater(verdict["confidence"], 0.0)
+        self.assertEqual(verdict["confidence_details"]["r_mean"], 0.05)
+        self.assertIsNone(verdict["confidence_details"]["r_dvdi"])
+        self.assertIsNone(verdict["confidence_details"]["agreement"])
 
     def test_no_source_verdict(self):
         v = evaluate(None, {"session_id": "T2", "v_present": False, "phone_expected": False}, CFG)
@@ -94,7 +111,8 @@ class TestDefectTags(unittest.TestCase):
     def test_self_heating_override(self):
         v = evaluate(base_features(drdt=6.0), dict(META), CFG)
         self.assertIn("SELF_HEATING", v["tags"])
-        self.assertIn(v["grade"], ("D", "F"))
+        self.assertEqual(v["grade"], "D")
+        self.assertEqual(v["verdict"], "Grade D: Poor")
 
     def test_intermittent_tag(self):
         v = evaluate(base_features(inter_frac=0.02, spikes=15), dict(META), CFG)
@@ -116,6 +134,7 @@ class TestDefectTags(unittest.TestCase):
         )
         v = evaluate(base_features(), meta, CFG)
         self.assertIn("FALLBACK_VOLTAGE_REFERENCE", v["tags"])
+        self.assertEqual(v["confidence_details"]["voltage_penalty"], 0.85)
 
     def test_leaky_tag(self):
         v = evaluate(base_features(idle_i=0.05), dict(META), CFG)  # 50 mA idle

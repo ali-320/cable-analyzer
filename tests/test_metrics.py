@@ -3,7 +3,7 @@ import unittest
 
 from tests.helpers import make_samples
 
-from src.features.metrics import compute_features, linreg, percentile, stdev
+from src.features.metrics import combine_features, compute_features, linreg, percentile, stdev
 from src.telemetry.models import Sample
 
 
@@ -40,6 +40,12 @@ class TestFeatures(unittest.TestCase):
         f = compute_features(samples, v_target=5.0, r_fixture=0.05)
         self.assertAlmostEqual(f["r_mean"], 0.15, places=3)  # R_cable = 0.2 - 0.05
 
+    def test_dvdi_slope_subtracts_fixture_resistance(self):
+        samples = make_samples(r_cable=0.25, current=1.0, n=20)
+        samples += make_samples(r_cable=0.25, current=1.5, n=20)
+        features = compute_features(samples, v_target=5.0, r_fixture=0.05)
+        self.assertAlmostEqual(features["r_dvdi"], 0.20, places=3)
+
     def test_dvdi_slope_equals_minus_r(self):
         # V vs I load line: both current levels must be in the steady band
         # (>= 50% of the peak busy current) to be included
@@ -60,6 +66,27 @@ class TestFeatures(unittest.TestCase):
         samples = make_samples(current=0.01)  # below i_min -> no busy samples
         f = compute_features(samples, v_target=5.0, min_busy_samples=5)
         self.assertIsNone(f)
+
+    def test_combines_features_from_multiple_supported_voltages(self):
+        def voltage_samples(target):
+            return [
+                Sample(
+                    t=index * 0.04,
+                    voltage=target - current * 0.25,
+                    current=current,
+                    power=(target - current * 0.25) * current,
+                    state="PROBE",
+                    valid=True,
+                )
+                for index, current in enumerate((0.5, 0.8, 1.1, 1.4, 1.7, 2.0))
+            ]
+
+        low = compute_features(voltage_samples(5.0), v_target=5.0)
+        high = compute_features(voltage_samples(9.0), v_target=9.0)
+        combined = combine_features([low, high], reference_voltage=5.0)
+        self.assertAlmostEqual(combined["r_mean"], 0.25, places=3)
+        self.assertAlmostEqual(combined["r_dvdi"], 0.25, places=3)
+        self.assertEqual(combined["n_busy"], low["n_busy"] + high["n_busy"])
 
     def test_probe_samples_are_included_after_idle_removal(self):
         samples = make_samples(state="PROBE", n=20)

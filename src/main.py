@@ -17,8 +17,9 @@ phone. Manual mode first verifies voltage support during VERIFICATION windows,
 then allocates the measurement budget across supported 5 V, 9 V, and 12 V
 ranges. Measurement samples use the normal charge states (CHARGING, CHARGED,
 NO_PHONE, NO_SOURCE, or FAULT).
-Unsupported ranges are excluded; if 5 V is unsupported, the highest supported
-range is used as the quality reference and reported explicitly.
+Unsupported ranges are excluded. All supported voltage measurement datasets
+are combined for grading and quality analysis; the lowest supported voltage is
+kept as the reference for voltage-specific display and confidence context.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ import tomllib
 from pathlib import Path
 
 from src.analysis.rules import evaluate as rule_verdict
-from src.features.metrics import compute_features
+from src.features.metrics import combine_features, compute_features
 from src.hardware.ch224k import CH224KController
 from src.hardware.gpio_map import PinMap
 from src.hardware.ina219_reader import INA219Reader
@@ -401,17 +402,18 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
         results["rail_mismatch_voltages"] = sorted(set(rail_mismatch_voltages))
 
     if voltage_features:
-        # Preserve the requested order for fallback grading: 5 V first, then
-        # 9 V, then 12 V. This avoids preferring 12 V merely because it is the
-        # highest rail and keeps the fallback closest to the normal 5 V path.
-        reference_v = 5 if "5" in voltage_features else min(int(v) for v in voltage_features)
+        # Use every supported voltage dataset for grading and quality analysis.
+        # Keep the lowest supported voltage as the reference for fields whose
+        # display is voltage-specific (for example V_min and v_target).
+        reference_v = min(int(v) for v in voltage_features)
         results["quality_reference_voltage"] = reference_v
-        results["quality_features"] = voltage_features[str(reference_v)]
-        if reference_v != 5:
-            results["quality_reference_note"] = (
-                "5 V unsupported; grade uses a supported higher-voltage reference "
-                "and should be compared with same-voltage calibration."
-            )
+        results["quality_features"] = combine_features(
+            list(voltage_features.values()),
+            reference_voltage=float(reference_v),
+        )
+        results["quality_reference_note"] = (
+            "all supported voltage datasets were combined for grading and quality analysis"
+        )
 
     # Never silently leave the phone on a higher rail. If the operator cannot
     # confirm the safe reset, abort the session visibly so the hardware can be
@@ -469,8 +471,8 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
     }
     if manual:
         results["measurement_note"] = (
-            "INA219 is inline with the phone. 5 V readings are used for quality; "
-            "9 V/12 V readings are compatibility checks only."
+            "INA219 is inline with the phone. All supported-voltage readings "
+            "are used for quality; unsupported ranges are excluded."
         )
         results["unsupported_voltages"] = []
         results["recovery_checks"] = []
@@ -554,8 +556,9 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
             continue
         last_verified_v = float(v)
         if manual:
-            # The phone is the load in this wiring. Keep 5 V as the quality
-            # dataset; higher-voltage readings are never mixed into grading.
+            # The phone is the load in this wiring. Each supported voltage is
+            # measured independently; the adaptive workflow combines all of
+            # those voltage-specific datasets for grading.
             manual_hold = float(
                 pr.get("manual_5v_hold_s" if v == 5 else "manual_hold_s", hold)
             )
@@ -571,7 +574,7 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
                 "i_mean": round(i_mean, 4),
                 "charging_detected": current_present,
                 "n_valid": len(valid),
-                "quality_dataset": v == 5,
+                "quality_dataset": True,
             }
             results.setdefault("manual_readings", []).append(reading)
 
@@ -796,8 +799,8 @@ def main() -> int:
             # the INA219 branch has no current. Do not mislabel that as NO_SOURCE.
             if probe.get("manual_readings"):
                 meta.v_present = True
-            # In manual inline-phone mode, grade only from the collected 5 V
-            # charging dataset. 9/12 V compatibility checks are excluded.
+            # In manual inline-phone mode, grade from all supported-voltage
+            # measurement datasets. Unsupported ranges are excluded.
             if probe.get("quality_features"):
                 features = probe["quality_features"]
                 meta.v_present = True

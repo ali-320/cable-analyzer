@@ -102,7 +102,12 @@ interruption_warn_frac = 0.01
 spike_count_warn = 10
 idle_leak_ma = 20.0
 nonlinear_ratio = 0.30
-confidence_floor = 0.0
+# Minimum resistance scale used to normalize confidence noise (ohms).
+confidence_resistance_floor_ohm = 0.02
+
+[calibration]
+# One-run calibration estimate: floor = multiplier × resistance noise sigma.
+confidence_floor_sigma_multiplier = 3.0
 
 [sim]                     # simulated-cable scenario (only used with hardware.simulate = true)
 r_cable_ohm = 0.21        # -> ~B/C grade cable for normal demos

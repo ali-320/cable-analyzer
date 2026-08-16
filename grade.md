@@ -104,11 +104,11 @@ The overrides live in `_force_grade()` and follow a *worst-of* rule: they can on
 
 ```text
 r_se  = r_std / sqrt(max(n_busy, 1))
-scale = max(abs(r_mean), 0.02)
+scale = max(abs(r_mean), confidence_resistance_floor_ohm)
 repeatability = 1 / (1 + r_se / scale)
 conf  = valid_frac · repeatability
 if r_dvdi is not None and r_mean > 0:
-    agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, 0.02))
+    agree = 1 − min(1, |r_mean − r_dvdi| / max(r_mean, confidence_resistance_floor_ohm))
     conf  = 0.6 · conf + 0.4 · max(0, agree)
 confidence = clip(conf, 0, 1)
 ```

@@ -11,7 +11,7 @@ All metrics are calculated by `src/features/metrics.py` from INA219 samples cont
 | `r_max` | Maximum calculated cable resistance. | Calculated cable-resistance values. |
 | `r_p95` | 95th-percentile cable resistance. | Calculated cable-resistance values. |
 | `r_p5` | 5th-percentile cable resistance. | Calculated cable-resistance values. |
-| `r_dvdi` | Resistance estimated from the voltage-versus-current slope. | Linear regression of measured `V` against `I`. |
+| `r_dvdi` | Resistance estimated from the voltage-versus-current slope. | Per-voltage regression of measured `V` against `I`, fixture subtraction, then combination across supported voltages. |
 | `dV_dI_slope` | Slope of voltage versus current; normally negative because voltage drops as current increases. | Linear regression using measured `V` and `I`. |
 | `r_loop_mean` | Average total path resistance before fixture subtraction. | `v_target`, measured `V` and `I`. |
 

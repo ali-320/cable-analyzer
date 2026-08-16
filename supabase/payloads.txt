@@ -1,0 +1,260 @@
+Cable Analyzer - Payloads sent to the Supabase database
+=======================================================
+
+Every payload is built in src/telemetry/remote.py and POSTed to the PostgREST
+endpoint:
+
+  sessions: POST {SUPABASE_URL}/rest/v1/sessions?on_conflict=session_id
+  samples:  POST {SUPABASE_URL}/rest/v1/samples?on_conflict=session_id,sample_index
+
+For each payload below:
+  - first JSON  = column name and its database type
+  - second JSON = a realistic example of the values
+
+
+1. SESSION PAYLOAD  (one row per completed session)
+---------------------------------------------------
+
+Columns and types:
+{
+  "session_id":        "TEXT (primary key)",
+  "device_id":         "TEXT (must equal pi-zero-2w-01 for RLS)",
+  "mode":              "TEXT (auto | probe | charge)",
+  "v_target":          "DOUBLE PRECISION",
+  "length_m":          "DOUBLE PRECISION",
+  "phone_expected":    "BOOLEAN",
+  "started_at":        "DOUBLE PRECISION (epoch seconds, nullable)",
+  "ended_at":          "DOUBLE PRECISION (epoch seconds, nullable)",
+  "charging_detected": "BOOLEAN",
+  "v_present":         "BOOLEAN",
+  "fault_reason":      "TEXT (nullable)",
+  "probe_json":        "JSONB",
+  "verdict_json":      "JSONB",
+  "created_at":        "TIMESTAMPTZ (ISO 8601 string)"
+}
+
+Example values:
+{
+  "session_id":        "20260812T093917321424",
+  "device_id":         "pi-zero-2w-01",
+  "mode":              "probe",
+  "v_target":          5.0,
+  "length_m":          1.0,
+  "phone_expected":    true,
+  "started_at":        1755002357.0,
+  "ended_at":          1755002392.0,
+  "charging_detected": true,
+  "v_present":         true,
+  "fault_reason":      null,
+  "probe_json":        { "...": "see section 3" },
+  "verdict_json":      { "...": "see section 2" },
+  "created_at":        "2026-08-12T09:39:17.321424+00:00"
+}
+
+Note: started_at/ended_at are epoch seconds and are null for probe sessions
+(probe mode never sets them).
+
+
+2. VERDICT_JSON  (embedded in the session row, produced by src/analysis/rules.py)
+---------------------------------------------------------------------------------
+
+Columns and types:
+{
+  "session_id":         "TEXT",
+  "model":              "TEXT",
+  "verdict":            "TEXT",
+  "grade":              "TEXT (A | B | C | D | F, nullable)",
+  "tags":               "ARRAY of TEXT",
+  "confidence":         "DOUBLE PRECISION (0.0 to 1.0)",
+  "evidence":           "ARRAY of TEXT",
+  "limitations":        "ARRAY of TEXT",
+  "confidence_details": "OBJECT",
+  "confidence_details.r_mean":           "DOUBLE PRECISION",
+  "confidence_details.r_dvdi":           "DOUBLE PRECISION (nullable)",
+  "confidence_details.n_busy":           "INTEGER",
+  "confidence_details.r_std":            "DOUBLE PRECISION",
+  "confidence_details.scale":            "DOUBLE PRECISION",
+  "confidence_details.confidence_base":  "DOUBLE PRECISION",
+  "confidence_details.agreement":        "DOUBLE PRECISION (nullable)",
+  "confidence_details.voltage_penalty":  "DOUBLE PRECISION"
+}
+
+Example values:
+{
+  "session_id": "20260812T093917321424",
+  "model":      "rules-v1",
+  "verdict":    "Grade A: Excellent",
+  "grade":      "A",
+  "tags":       ["HIGH_LOSS"],
+  "confidence": 0.873,
+  "evidence": [
+    "R_mean=18 mOhm (normalized to 1 m)",
+    "V_min=4.980 V (target 5.0 V)",
+    "eta=99.6%"
+  ],
+  "limitations": [
+    "single measurement point; loop R includes connectors and the CH224K path (baseline subtracted)",
+    "absolute R biased by charger tolerance (+/-5%); same-current differential calibration mitigates"
+  ],
+  "confidence_details": {
+    "r_mean":          0.017883,
+    "r_dvdi":          null,
+    "n_busy":          240,
+    "r_std":           0.0012,
+    "scale":           0.02,
+    "confidence_base": 0.913,
+    "agreement":       null,
+    "voltage_penalty": 1.0
+  }
+}
+
+Note: r_dvdi and agreement are null when no reliable negative V/I slope
+exists. voltage_penalty is 1.0 normally, 0.85 when the display reference
+voltage is not 5 V.
+
+
+3. PROBE_JSON  (embedded in the session row, built in src/main.py)
+-------------------------------------------------------------------
+
+Columns and types:
+{
+  "steps":                       "ARRAY of OBJECT",
+  "steps[].v_target":            "DOUBLE PRECISION",
+  "steps[].i":                   "DOUBLE PRECISION (load current A)",
+  "steps[].v_load":              "DOUBLE PRECISION (V_min under load)",
+  "steps[].r_loop_mohm":         "DOUBLE PRECISION",
+  "steps[].r_cable_mohm":        "DOUBLE PRECISION (loop minus fixture)",
+  "pd_blocked":                  "ARRAY of DOUBLE PRECISION (voltages)",
+  "manual_voltage_mode":         "BOOLEAN",
+  "measurement_note":            "TEXT",
+  "r_fixture":                   "DOUBLE PRECISION",
+  "support_flags":               "OBJECT (voltage string -> BOOLEAN)",
+  "support_observations":        "OBJECT (voltage string -> TEXT)",
+  "manual_readings":             "ARRAY of OBJECT",
+  "unsupported_voltages":        "ARRAY of DOUBLE PRECISION",
+  "recovery_checks":             "ARRAY",
+  "voltage_features":            "OBJECT (voltage string -> feature OBJECT)",
+  "measurement_budget_readings": "INTEGER",
+  "support_check_readings":      "INTEGER",
+  "quality_reference_voltage":   "INTEGER (present only with quality data)",
+  "quality_features":            "OBJECT (combined feature dict)",
+  "quality_reference_note":      "TEXT",
+  "manual_voltage_mismatch":     "ARRAY of DOUBLE PRECISION (present only on mismatch)",
+  "rail_mismatch_voltages":      "ARRAY of DOUBLE PRECISION (present only on mismatch)",
+  "no_current_all_voltages":     "BOOLEAN",
+  "dR_dt_mOhm_per_min":          "DOUBLE PRECISION (present only after heat hold)",
+  "r_cable_heat_end_mohm":       "DOUBLE PRECISION (present only after heat hold)"
+}
+
+Example values:
+{
+  "steps": [
+    {
+      "v_target":      5.0,
+      "i":             1.0,
+      "v_load":        4.921,
+      "r_loop_mohm":   79.0,
+      "r_cable_mohm":  17.9
+    },
+    {
+      "v_target":      5.0,
+      "i":             2.0,
+      "v_load":        4.843,
+      "r_loop_mohm":   78.5,
+      "r_cable_mohm":  17.4
+    }
+  ],
+  "pd_blocked":          [],
+  "manual_voltage_mode": true,
+  "measurement_note":    "Support flags are determined during VERIFICATION windows. Measurements are allocated across supported voltages and use normal charge-state labels; unsupported ranges are excluded.",
+  "r_fixture":           0.0,
+  "support_flags":       {"5": true, "9": true, "12": false},
+  "support_observations": {"5": "current_observed", "9": "current_observed", "12": "no_current_observed"},
+  "manual_readings": [
+    {
+      "v_target": 5,
+      "supports_voltage": true,
+      "support_reason": "current_in_VERIFICATION",
+      "support_v_mean": 4.98,
+      "support_i_mean": 0.512,
+      "support_current_min_a": 0.01,
+      "support_active_fraction": 0.98,
+      "support_n_valid": 60
+    }
+  ],
+  "unsupported_voltages":        [12],
+  "recovery_checks":             [],
+  "voltage_features":            {"5": { "...": "per-voltage feature dict (same keys as quality_features)" }},
+  "measurement_budget_readings": 300,
+  "support_check_readings":      75,
+  "quality_reference_voltage":   5,
+  "quality_features": {
+    "r_mean":                0.017883,
+    "r_std":                 0.0012,
+    "r_max":                 0.021,
+    "r_p95":                 0.0205,
+    "r_p5":                  0.0152,
+    "r_dvdi":                null,
+    "dV_dI_slope":           0.0,
+    "r_loop_mean":           0.0785,
+    "sigma_V":               0.008,
+    "V_min":                 4.98,
+    "eta":                   0.996,
+    "mean_I":                0.512,
+    "max_I":                 0.55,
+    "mean_P_loss":           0.01,
+    "E_wh":                  0.0,
+    "dR_dt_mOhm_per_min":    0.0,
+    "interruption_frac":     0.0,
+    "spike_count":           0,
+    "idle_I":                null,
+    "n_busy":                240,
+    "n_total":               300,
+    "valid_frac":            1.0,
+    "duration_s":            12.0,
+    "v_target":              5.0,
+    "r_fixture":             0.0,
+    "length_m":              1.0
+  },
+  "quality_reference_note":     "all supported voltage datasets were combined for grading and quality analysis",
+  "no_current_all_voltages":    false
+}
+
+Note: keys marked "present only..." appear only in specific situations.
+voltage_features/quality_features use the same feature keys listed above.
+
+
+4. SAMPLE PAYLOAD  (one row per reading, posted in batches of up to 500)
+------------------------------------------------------------------------
+
+Columns and types:
+{
+  "session_id":   "TEXT",
+  "device_id":    "TEXT (must equal pi-zero-2w-01 for RLS)",
+  "sample_index": "INTEGER (starts at 0, unique per session)",
+  "t":            "DOUBLE PRECISION (seconds since acquisition start)",
+  "voltage_v":    "DOUBLE PRECISION",
+  "current_a":    "DOUBLE PRECISION",
+  "power_w":      "DOUBLE PRECISION",
+  "state":        "TEXT (NO_SOURCE | NO_PHONE | CHARGING | CHARGED | FAULT | VERIFICATION | PROBE)",
+  "valid":        "BOOLEAN"
+}
+
+Example values:
+{
+  "session_id":   "20260812T093917321424",
+  "device_id":    "pi-zero-2w-01",
+  "sample_index": 0,
+  "t":            1.2345,
+  "voltage_v":    4.98,
+  "current_a":    0.512,
+  "power_w":      2.55,
+  "state":        "CHARGING",
+  "valid":        true
+}
+
+A full session is sent as an array of these rows, for example:
+[
+  { "session_id": "20260812T093917321424", "device_id": "pi-zero-2w-01", "sample_index": 0, "t": 1.2345, "voltage_v": 4.98, "current_a": 0.512, "power_w": 2.55, "state": "CHARGING", "valid": true },
+  { "session_id": "20260812T093917321424", "device_id": "pi-zero-2w-01", "sample_index": 1, "t": 1.2745, "voltage_v": 4.98, "current_a": 0.513, "power_w": 2.55, "state": "CHARGING", "valid": true }
+]

@@ -176,9 +176,10 @@ voltages whose flag is true. Measurement rows are classified with the normal
 charge states (`CHARGING`, `CHARGED`, `NO_PHONE`, `NO_SOURCE`, or `FAULT`).
 Every normal band transition requires 3 seconds of continuous readings;
 confirmed candidate samples are relabeled to the destination state. They are
-eligible for quality calculations when valid and above the current threshold. Unsupported ranges are excluded; if 5 V is unsupported, the
-lowest supported higher voltage becomes the quality reference and the verdict
-is marked `FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
+eligible for quality calculations when valid and above the current threshold. Unsupported ranges are excluded. All supported voltage measurement datasets
+are combined for grading and quality analysis; the lowest supported voltage is
+kept as the display reference. A non-5 V reference is marked
+`FALLBACK_VOLTAGE_REFERENCE`. A rail-verification failure is reported
 separately and does not prove that the device rejects that voltage. If no
 current is observed in all three `VERIFICATION` checks, the terminal reports
 `NO_CURRENT_ALL_VOLTAGES` and no cable grade is produced. All raw probe-phase
@@ -246,7 +247,7 @@ OK
 |---|---|
 | `python -m src.main --demo` | Simulated end-to-end run, **no hardware needed** (fastest way to see the pipeline work) |
 | `python -m src.main --simulate --mode probe` | Probe only, synthetic hardware |
-| `python -m src.main --manual --mode probe --length 1.0` | Inline-phone test: 5 V quality readings, then 9/12 V compatibility checks |
+| `python -m src.main --manual --mode probe --length 1.0` | Inline-phone test: combines quality readings from every supported 5 V/9 V/12 V range |
 | `python -m src.main --simulate --mode charge` | Charge monitoring only, synthetic phone |
 | `python -m src.main --json` | Print the verdict as JSON |
 | `python -m src.main --phone-expected` | Treat a present-but-not-charging phone as an OPEN cable after `open_timeout_s` |
