@@ -64,6 +64,12 @@ Made the first verification of 5V within the range of +-1V.
 11. When a device is connected and the requested voltage is 9V, the voltage drops to 7.5+ voltage due to the device. Thus, the
 range should not be 9 +- 1 V, but should be 9 +0.5 V and 9 - 1.5 V or 9 - 2 V.
 
+12. The external display on hardware is connected but not working.
+[done]
+It was not working because of a soldering issue and the code now picking up the correct libraries. Basically working on
+circuit python but Raspberry pi supports C python. So changed and everything worked beautifully.
+
+
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
 [DONE]
