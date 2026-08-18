@@ -24,6 +24,19 @@ load_pwm = 18             # e-load setpoint PWM (GPIO18 = PWM0)
 status_led = 5
 phone_present = 6         # optional comparator input
 
+[display]
+# ST7735S SPI TFT — set enabled = false to skip even if hardware is present.
+enabled = true
+width = 128
+height = 160
+rotation = 270
+# BCM GPIO numbers (SPI0 CE0 / SCLK / MOSI are fixed on the Pi)
+cs_gpio = 8               # SPI0 CE0 (physical pin 24)
+dc_gpio = 24              # Data / Command (physical pin 18)
+rst_gpio = 25             # Reset (physical pin 22)
+# bl_gpio — backlight is hard-wired to 3.3 V on this build (no GPIO control)
+baudrate = 24000000
+
 [ch224k]
 # gpio = legacy protected wiring; manual = temporary Y-junction wiring
 # (SEL0/1/2, EN and PWR_OK are not connected to the Pi); voltage = CH224K

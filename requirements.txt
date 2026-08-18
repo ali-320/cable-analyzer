@@ -9,3 +9,10 @@
 
 pi-ina219>=0.2.3
 # Remote Supabase sync uses Python's standard-library HTTPS client.
+
+# ── ST7735S SPI display (Pi only — skipped gracefully on Windows) ──
+# Required for the display module:
+adafruit-blinka>=1.7.0
+Pillow>=9.0.0
+# SPI/GPIO access on the Pi:
+#   sudo apt install -y python3-spidev

@@ -919,6 +919,7 @@ def main() -> int:
     simulate = cfg["hardware"].get("simulate", False)
 
     cli.print_banner()
+    cli.setup_display()          # bring up ST7735S if attached
 
     # calibration file (written by scripts/calibrate.py) overrides config baseline
     cal_path = Path(cfg.get("paths", {}).get("data_dir", "data")) / "calibration.json"
@@ -1054,6 +1055,7 @@ def main() -> int:
         cli.print_verdict(verdict, as_json=args.json)
         return 0
     finally:
+        cli.close_display()      # turn off backlight and release SPI/GPIO
         ch224k.close()
         load.close()
         reader.shutdown()

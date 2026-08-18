@@ -1,9 +1,19 @@
-"""Console UI helpers (DEVELOPMENT_PLAN.md §9 ``ui/cli.py``)."""
+"""Console UI helpers (DEVELOPMENT_PLAN.md §9 ``ui/cli.py``).
+"""
 from __future__ import annotations
 
 import json
 
 from src.telemetry.models import Sample
+
+# Optional ST7735S display — gracefully unavailable on non-Pi hosts.
+try:
+    from src.ui.display import ST7735S as _ST7735S
+except Exception:
+    _ST7735S = None  # type: ignore[misc,assignment]
+
+display: "_ST7735S | None" = None
+
 
 
 def force_utf8_stdout() -> None:
@@ -129,11 +139,34 @@ def print_probe(probe: dict) -> None:
     print()
 
 
+def setup_display() -> None:
+    """Try to bring up the ST7735S display; no-op if unavailable."""
+    global display
+    if _ST7735S is not None and display is None:
+        try:
+            display = _ST7735S()
+        except Exception:
+            display = None
+
+
+def close_display() -> None:
+    """Shut down the display if it was initialised."""
+    global display
+    if display is not None:
+        try:
+            display.close()
+        except Exception:
+            pass
+        display = None
+
+
 def print_live(sample: Sample) -> None:
     print(
         f"  t={sample.t:6.1f}s  V={sample.voltage:6.3f} V  "
         f"I={sample.current:6.3f} A  P={sample.power:6.2f} W  state={sample.state}"
     )
+    if display is not None:
+        display.update(sample.t, sample.voltage, sample.current, sample.power)
 
 
 def print_verdict(verdict: dict, as_json: bool = False) -> None:
