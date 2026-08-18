@@ -79,6 +79,3 @@ The IDLE name has been replaced by the VERIFICATION name.
 data to the database.
 [DONE]
 Instead of configuring a local database I configured a Supbase to test that if remote data sending is possible or not.
-
-5. The AI model could analyze the verdict and then just give future recommendations.
-[No longer needed]
