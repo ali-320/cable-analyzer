@@ -43,15 +43,21 @@ is no current and says that voltages are not supported.
 Now it supports the CHARGED state as well.
 
 
-
 9. I ran the code in charge mode, it got into the CHARGING state, after which the current remained in the CHARGED state for
 quite a while, but it never went to the charged state.
+[DONE]
+The phone does move to charged state, the problem is that the I only see the current in the charged after the one second gap
+on the terminal whereas in the real milli seconds range in .csv output. The current never fully remains in the charged state
+for the debouce time.
 
 10. In PROBE mode, the 5V verfiication test is making the 5V false unnecessarily while giving the reason of the rail_not_verified.
 [CAUSE]
 In PROBE mode the voltage check for the 5V is within +-0.25V. The voltage at 4.6 therefore it said that the rail is not verified.
 [DONE]
 Made the first verification of 5V within the range of +-1V.
+
+11. When a device is connected and the requested voltage is 9V, the voltage drops to 7.5+ voltage due to the device. Thus, the
+range should not be 9 +- 1 V, but should be 9 +0.5 V and 9 - 1.5 V or 9 - 2 V.
 
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
@@ -75,3 +81,4 @@ data to the database.
 Instead of configuring a local database I configured a Supbase to test that if remote data sending is possible or not.
 
 5. The AI model could analyze the verdict and then just give future recommendations.
+[No longer needed]
