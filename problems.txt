@@ -22,10 +22,13 @@ This is because in PROBE mode, the IDLE state represents checking the flags, and
 
 4. The IDLE state and the CHARGED state, both work on the lower current band, we can remove one of them.
 The only difference is that the the phone first stays in IDLE and can only go to CHARGED after CHARGING state.
-[OPTIONAL]
+[DONE]
+The IDLE state is gone now since it had no useful meaning.
 
 
 5. Tell me that what does the phone_taper_s represents in the config.toml
+[DONE]
+It is used for simluation and has no usecase in hardware module.
 
 6. The device takes the readings of the debounce_end_s and debounce_start_s, even though they are just for checking the
 state transitions. They shouldn't be taken if the state transition is successfull.
@@ -34,7 +37,9 @@ state transitions. They shouldn't be taken if the state transition is successful
 
 
 7. The confidence formula may not be working because the confidence in all tests is coming out to be 0.0
-[NEEDS MORE CHECKING]
+[DONE]
+The confidence is now working and the previous issue was because of the r_dvdi. Now all of the values
+used in computing the confidence are also showed on the terminal.
 
 
 8. During the VERIFICATION state, if the mobile is fully charged and receiving current in 0.0xx, it says that there 
