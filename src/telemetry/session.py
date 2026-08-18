@@ -63,7 +63,10 @@ class SessionTracker:
         self.debounce_end = self.debounce_s
         self.debounce_finish = float(s.get("debounce_finish_s", 10.0))
         self.open_timeout = float(s.get("open_timeout_s", 30.0))
-        self.v_present_min = 1.0
+        # Minimum bus voltage that counts as "source present". The legacy
+        # wiring uses 1.0 V; the CH224K-removed (--voltage) mode raises it
+        # (3.0 V by default) so a dead charger is reported as NO_SOURCE.
+        self.v_present_min = float(s.get("v_present_min_v", 1.0))
         self.v_target = float(v_target)
         self.phone_expected = bool(phone_expected)
 

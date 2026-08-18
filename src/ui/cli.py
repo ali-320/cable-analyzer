@@ -30,11 +30,13 @@ def print_banner() -> None:
 def print_self_check(results: dict) -> None:
     print("\n--- SELF-CHECK ---")
     ok = True
-    for key, label in (
-        ("ina219", "INA219 on I2C"),
-        ("voltage", "Bus voltage ~5 V"),
-        ("pwr_ok", "CH224K PWR_OK (PD contract; manual mode bypasses this)"),
-    ):
+    labels = [("ina219", "INA219 on I2C")]
+    if results.get("voltage_mode"):
+        labels.append(("voltage", "Source voltage present"))
+    else:
+        labels.append(("voltage", "Bus voltage ~5 V"))
+        labels.append(("pwr_ok", "CH224K PWR_OK (PD contract; manual mode bypasses this)"))
+    for key, label in labels:
         passed = bool(results.get(key))
         ok = ok and passed
         print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
@@ -48,10 +50,21 @@ def print_self_check(results: dict) -> None:
 
 
 def print_probe(probe: dict) -> None:
-    heading = "manual-voltage readings" if probe.get("manual_voltage_mode") else "multi-voltage cable characterization"
+    if probe.get("voltage_mode"):
+        heading = "passive voltage-class readings (no CH224K)"
+    elif probe.get("manual_voltage_mode"):
+        heading = "manual-voltage readings"
+    else:
+        heading = "multi-voltage cable characterization"
     print(f"\n--- PROBE ({heading}) ---")
     if probe.get("measurement_note"):
         print(f"  NOTE: {probe['measurement_note']}")
+    for center, summary in probe.get("voltage_classes", {}).items():
+        print(
+            f"  class {center} V  n_busy={summary['n_busy']}  "
+            f"r_mean={summary['r_mean_ohm'] * 1000:.1f} mΩ  "
+            f"I_mean={summary['i_mean']:.3f} A  V_min={summary['v_mean']:.3f} V"
+        )
     for step in probe.get("steps", []):
         print(
             f"  V_target={step['v_target']:>5.1f} V  I={step['i']:>4.2f} A  "
@@ -88,7 +101,10 @@ def print_probe(probe: dict) -> None:
     if probe.get("quality_reference_note"):
         print(f"  note: {probe['quality_reference_note']}")
     if probe.get("no_current_all_voltages"):
-        print("  !! no current flowed in the 5 V, 9 V, or 12 V ranges")
+        if probe.get("voltage_mode"):
+            print("  !! no charging current measured from the present source voltage")
+        else:
+            print("  !! no current flowed in the 5 V, 9 V, or 12 V ranges")
     unsupported = probe.get("unsupported_voltages") or []
     if unsupported:
         print(f"  compatibility: phone drew no current at {unsupported} V; excluded from quality grade")

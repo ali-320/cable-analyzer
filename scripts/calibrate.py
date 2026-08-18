@@ -30,7 +30,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.features.metrics import compute_features
+from src.features.metrics import compute_features, voltage_class_center
 from src.hardware.ch224k import CH224KController
 from src.hardware.gpio_map import PinMap
 from src.hardware.ina219_reader import INA219Reader
@@ -98,6 +98,7 @@ def _manual_passive_calibration(
     simulate: bool,
     v_target: float,
     i_min: float,
+    voltage_mode: bool = False,
 ) -> tuple[int, float | None, Path | None]:
     """Calibrate from the phone's natural current in manual inline mode.
 
@@ -108,16 +109,23 @@ def _manual_passive_calibration(
     """
     pr = cfg.get("probe", {})
     ch_cfg = cfg.get("ch224k", {})
+    vcfg = cfg.get("voltage", {})
     manual_hold = float(pr.get("manual_5v_hold_s", pr.get("step_hold_s", 5.0)))
     wait_s = float(ch_cfg.get("renegotiate_wait_s", 1.5))
+    class_width = float(vcfg.get("class_width_v", 1.0))
+    v_present_min = float(
+        cfg.get("session", {}).get("v_present_min_v", 3.0)
+    ) if voltage_mode else 0.0
 
     print("\n--- MANUAL PHONE-INLINE REFERENCE CALIBRATION ---")
     print("  Connect the phone through the SHORT, known-good/reference cable.")
     print("  The phone must be actively charging; its current is not controlled by the Pi.")
     if simulate:
         print(f"  simulation: assuming the reference phone is charging at {v_target:g} V")
-    else:
+    elif not voltage_mode:
         _manual_voltage_confirmation(v_target)
+    else:
+        print("  voltage mode: no CH224K; the charger's present voltage is used directly.")
 
     # In simulation, model an actively charging phone. On real hardware the
     # connected phone supplies the current naturally.
@@ -125,13 +133,19 @@ def _manual_passive_calibration(
         sim_state.phone_on = True
         sim_state.current = float(cfg.get("sim", {}).get("phone_current_a", 1.2))
 
-    if not ch224k.set_voltage(v_target):
-        print(f"!! CH224K could not select {v_target:g} V.")
-        return 1, None, None
-    time.sleep(wait_s)
+    if not voltage_mode:
+        if not ch224k.set_voltage(v_target):
+            print(f"!! CH224K could not select {v_target:g} V.")
+            return 1, None, None
+        time.sleep(wait_s)
 
     samples = Sampler(reader, rate, simulate).run(manual_hold, state="PROBE")
     valid = [s for s in samples if s.valid]
+    if voltage_mode:
+        # The charger's own voltage defines the reference class center.
+        v_mean_all = sum(s.voltage for s in valid) / len(valid) if valid else 0.0
+        if valid:
+            v_target = voltage_class_center(v_mean_all, class_width)
     feat = compute_features(
         valid,
         v_target=v_target,
@@ -155,9 +169,14 @@ def _manual_passive_calibration(
         return 1, None, None
     mean_i = feat["mean_I"]
     mean_v = sum(s.voltage for s in busy) / len(busy)
-    min_compliance_v = float(
-        cfg.get("measurement", {}).get("v_min_compliance_5v", 4.75)
-    )
+    if voltage_mode:
+        min_compliance_v = v_present_min
+        compliance_label = "source presence"
+    else:
+        min_compliance_v = float(
+            cfg.get("measurement", {}).get("v_min_compliance_5v", 4.75)
+        )
+        compliance_label = "5 V rail compliance"
     if mean_i < i_min:
         print(
             "!! calibration produced insufficient charging current: "
@@ -166,8 +185,8 @@ def _manual_passive_calibration(
         return 1, None, None
     if mean_v < min_compliance_v:
         print(
-            "!! calibration rejected: measured 5 V rail is below the "
-            f"compliance limit ({mean_v:.3f} V < {min_compliance_v:.3f} V)."
+            "!! calibration rejected: measured rail is below the "
+            f"{compliance_label} limit ({mean_v:.3f} V < {min_compliance_v:.3f} V)."
         )
         print("   Fix the charger, reference cable, or wiring before saving a baseline.")
         return 1, None, None
@@ -190,7 +209,11 @@ def _manual_passive_calibration(
 
     out = _save_calibration(
         cfg,
-        method="known-good reference cable with passive phone load at 5 V",
+        method=(
+            "known-good reference cable with passive phone load at the charger's present voltage"
+            if voltage_mode
+            else "known-good reference cable with passive phone load at 5 V"
+        ),
         rows=[row],
         mean_mohm=r_loop_mohm,
         note=(
@@ -288,12 +311,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Calibrate reference baseline resistance")
     ap.add_argument("--config", default="config.toml")
     ap.add_argument("--simulate", action="store_true", help="use synthetic hardware")
+    ap.add_argument("--voltage", action="store_true", help="passive mode: no CH224K; use the charger's present voltage directly")
     args = ap.parse_args()
 
     with open(args.config, "rb") as fh:
         cfg = tomllib.load(fh)
     if args.simulate:
         cfg["hardware"]["simulate"] = True
+    if args.voltage:
+        cfg["ch224k"]["control_mode"] = "voltage"
+        cfg["session"]["v_present_min_v"] = float(
+            cfg.get("voltage", {}).get("v_present_min_v", 3.0)
+        )
 
     print("=== REFERENCE CALIBRATION (use a SHORT known-good reference cable) ===")
     sim_state = None
@@ -320,12 +349,15 @@ def main() -> int:
     rate = float(cfg["hardware"].get("sample_rate_hz", 25.0))
     v_target = float(cfg.get("measurement", {}).get("v_target_5v", 5.0))
     i_min = float(cfg.get("measurement", {}).get("i_min_compute", 0.1))
-    manual_mode = str(cfg.get("ch224k", {}).get("control_mode", "gpio")).lower() == "manual"
+    control_mode = str(cfg.get("ch224k", {}).get("control_mode", "gpio")).lower()
+    manual_mode = control_mode == "manual"
+    voltage_mode = control_mode == "voltage"
 
     try:
-        if manual_mode:
+        if manual_mode or voltage_mode:
             status, _, _ = _manual_passive_calibration(
-                cfg, reader, ch224k, load, sim_state, rate, simulate, v_target, i_min
+                cfg, reader, ch224k, load, sim_state, rate, simulate, v_target, i_min,
+                voltage_mode=voltage_mode,
             )
         else:
             status, _, _ = _controlled_load_calibration(

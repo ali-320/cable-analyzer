@@ -7,8 +7,16 @@ easy to audit against the plan:
     R_cable   = R_loop - R_fixture                 (calibrated baseline)
     dR/dt     = linear-regression slope of R_cable over time  [mΩ/min]
     dV/dI     = linear-regression slope of V_load vs I         [≈ -R]
+
+Voltage-class mode (CH224K removed) buckets readings into real-time voltage
+classes (1 V wide by default) so the charger's own voltage is used directly:
+4.67 V falls into the 4.5-5.5 V class (center 5), 5.8 V into 5.5-6.5 V
+(center 6), and so on. Each class is calculated separately at its own
+class-center target and the per-class feature sets are combined for grading.
 """
 from __future__ import annotations
+
+import math
 
 from src.telemetry.models import Sample
 
@@ -211,6 +219,68 @@ def compute_features(
         "r_fixture": r_fixture,
         "length_m": length_m,
     }
+
+
+def voltage_class_center(voltage: float, class_width: float = 1.0) -> float:
+    """Real-time class center for a measured voltage (half-up rounding).
+
+    With the default 1 V width: 4.67 V -> 5.0 (class 4.5-5.5 V),
+    5.8 V -> 6.0 (class 5.5-6.5 V), 8.7 V -> 9.0 (class 8.5-9.5 V).
+    """
+    width = max(float(class_width), 1e-6)
+    return math.floor(voltage / width + 0.5) * width
+
+
+def compute_features_by_class(
+    samples: list[Sample],
+    class_width: float = 1.0,
+    *,
+    r_fixture: float = 0.0,
+    length_m: float | None = None,
+    i_min: float = 0.10,
+    i_no_load: float = 0.05,
+    i_no_phone: float = 0.01,
+) -> tuple[dict[float, dict], dict | None]:
+    """Bucket valid samples into real-time voltage classes and compute one
+    feature set per class (each at its own class-center ``v_target``), then
+    combine the class feature sets for grading.
+
+    Returns ``(per_class_features, combined_features)``. ``combined_features``
+    is None when no class produced a trustworthy resistance estimate (for
+    example when no charging current flowed).
+    """
+    classes: dict[float, list[Sample]] = {}
+    for s in samples:
+        if not s.valid or s.voltage <= 0.0:
+            continue
+        center = voltage_class_center(s.voltage, class_width)
+        classes.setdefault(center, []).append(s)
+
+    feature_sets: dict[float, dict] = {}
+    for center, group in sorted(classes.items()):
+        feat = compute_features(
+            group,
+            v_target=float(center),
+            r_fixture=r_fixture,
+            length_m=length_m,
+            i_min=i_min,
+            i_no_load=i_no_load,
+            i_no_phone=i_no_phone,
+        )
+        if feat is not None:
+            feature_sets[center] = feat
+
+    if not feature_sets:
+        return feature_sets, None
+
+    # The dominant class (most busy samples) supplies the voltage-specific
+    # display fields (V_min, v_target, ...) after combination.
+    dominant = max(feature_sets, key=lambda center: feature_sets[center].get("n_busy", 0))
+    combined = combine_features(
+        list(feature_sets.values()),
+        reference_voltage=float(dominant),
+    )
+    return feature_sets, combined
 
 
 def combine_features(

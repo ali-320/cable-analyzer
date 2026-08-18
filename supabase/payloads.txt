@@ -143,7 +143,18 @@ Columns and types:
   "rail_mismatch_voltages":      "ARRAY of DOUBLE PRECISION (present only on mismatch)",
   "no_current_all_voltages":     "BOOLEAN",
   "dR_dt_mOhm_per_min":          "DOUBLE PRECISION (present only after heat hold)",
-  "r_cable_heat_end_mohm":       "DOUBLE PRECISION (present only after heat hold)"
+  "r_cable_heat_end_mohm":       "DOUBLE PRECISION (present only after heat hold)",
+  "-- --voltage mode only --":   "(CH224K removed; the keys below replace the verification fields)",
+  "voltage_mode":                "BOOLEAN (true in --voltage mode)",
+  "voltage_classes":             "OBJECT (class center string -> summary OBJECT)",
+  "voltage_classes[].v_target":  "DOUBLE PRECISION (class center, e.g. 5.0)",
+  "voltage_classes[].n":         "INTEGER",
+  "voltage_classes[].n_busy":    "INTEGER",
+  "voltage_classes[].v_mean":    "DOUBLE PRECISION (V_min of the class)",
+  "voltage_classes[].i_mean":    "DOUBLE PRECISION",
+  "voltage_classes[].r_mean_ohm":"DOUBLE PRECISION",
+  "voltage_class_width_v":       "DOUBLE PRECISION (1.0 by default)",
+  "v_present":                   "BOOLEAN (source voltage above the NO_SOURCE threshold)"
 }
 
 Example values:
@@ -222,6 +233,10 @@ Example values:
 
 Note: keys marked "present only..." appear only in specific situations.
 voltage_features/quality_features use the same feature keys listed above.
+In --voltage mode there are no support_flags/manual_readings/pd_blocked/
+manual_voltage_mismatch/rail_mismatch_voltages keys, so the verdict never
+carries the VOLTAGE_MISMATCH, RAIL_VERIFICATION_FAILED, PD_BLOCKED, or
+FALLBACK_VOLTAGE_REFERENCE tags, and voltage_penalty is always 1.0.
 
 
 4. SAMPLE PAYLOAD  (one row per reading, posted in batches of up to 500)

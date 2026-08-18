@@ -20,6 +20,14 @@ NO_PHONE, NO_SOURCE, or FAULT).
 Unsupported ranges are excluded. All supported voltage measurement datasets
 are combined for grading and quality analysis; the lowest supported voltage is
 kept as the reference for voltage-specific display and confidence context.
+
+With ``--voltage`` (CH224K removed), the charger's own voltage is used
+directly: probe mode starts reading immediately with no voltage selection or
+verification, self-check only proves that a source voltage is present, and
+readings are bucketed into real-time voltage classes (1 V wide by default).
+Each class is calculated separately at its own class-center target and the
+per-class feature sets are combined for the final grade. The user is never
+asked to change a voltage manually in this mode.
 """
 from __future__ import annotations
 
@@ -32,7 +40,12 @@ import tomllib
 from pathlib import Path
 
 from src.analysis.rules import evaluate as rule_verdict
-from src.features.metrics import combine_features, compute_features
+from src.features.metrics import (
+    combine_features,
+    compute_features,
+    compute_features_by_class,
+    voltage_class_center,
+)
 from src.hardware.ch224k import CH224KController
 from src.hardware.gpio_map import PinMap
 from src.hardware.ina219_reader import INA219Reader
@@ -51,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--config", default="config.toml")
     ap.add_argument("--simulate", action="store_true", help="use synthetic hardware")
     ap.add_argument("--manual", action="store_true", help="manual CH224K SEL changes; no CH224K GPIO required")
+    ap.add_argument("--voltage", action="store_true", help="CH224K removed: use the charger's present voltage directly with real-time voltage classes; never prompts for a manual voltage change")
     ap.add_argument("--mode", choices=["auto", "probe", "charge"], default="auto")
     ap.add_argument("--self-check", action="store_true", help="hardware sanity check only")
     ap.add_argument("--duration", type=float, default=None, help="charge-mode timeout (s)")
@@ -81,7 +95,7 @@ def validate_current_bands(cfg: dict) -> None:
         )
 
 
-def load_config(path: str, simulate: bool, demo: bool, manual: bool = False) -> dict:
+def load_config(path: str, simulate: bool, demo: bool, manual: bool = False, voltage: bool = False) -> dict:
     with open(path, "rb") as fh:
         cfg = tomllib.load(fh)
     validate_current_bands(cfg)
@@ -93,12 +107,23 @@ def load_config(path: str, simulate: bool, demo: bool, manual: bool = False) -> 
         cfg["measurement"]["r_fixture_ohm"] = sim_fixture
     if not isinstance(cfg.get("ch224k"), dict):
         cfg["ch224k"] = {}
+    if not isinstance(cfg.get("voltage"), dict):
+        cfg["voltage"] = {}
     # The controller deliberately keeps simulation's automatic behavior by
     # default. This explicit marker lets ``--manual --simulate`` exercise the
     # same adaptive manual workflow as the real temporary wiring.
     cfg["_manual_requested"] = bool(manual)
     if manual:
         cfg["ch224k"]["control_mode"] = "manual"
+    # CH224K-removed architecture: the charger's present voltage is used
+    # directly, and the NO_SOURCE threshold is raised to the configured value.
+    cfg["_voltage_requested"] = bool(voltage)
+    if voltage:
+        cfg["ch224k"]["control_mode"] = "voltage"
+        cfg["voltage"]["enabled"] = True
+        cfg["session"]["v_present_min_v"] = float(
+            cfg["voltage"].get("v_present_min_v", 3.0)
+        )
     return cfg
 
 
@@ -117,6 +142,10 @@ def build_hardware(cfg: dict, simulate: bool):
             open_circuit=bool(sim_cfg.get("open_circuit", False)),
             intermittent=bool(sim_cfg.get("intermittent", False)),
         )
+        if cfg.get("ch224k", {}).get("control_mode") == "voltage":
+            # No CH224K to negotiate: the simulated charger simply provides
+            # its own (configurable) voltage.
+            sim_state.v_target = float(sim_cfg.get("source_voltage_v", 5.0))
     pins = PinMap.from_config(cfg)
     reader = INA219Reader(cfg, simulate=simulate, sim_state=sim_state)
     ch224k = CH224KController(pins, cfg, simulate=simulate, sim_state=sim_state)
@@ -126,7 +155,11 @@ def build_hardware(cfg: dict, simulate: bool):
 
 def run_self_check(cfg: dict, reader: INA219Reader, ch224k: CH224KController) -> dict:
     manual = bool(getattr(ch224k, "manual", False))
-    results: dict = {"ina219": False, "voltage": False, "pwr_ok": manual, "manual_mode": manual}
+    voltage_mode = bool(getattr(ch224k, "voltage_mode", False))
+    results: dict = {
+        "ina219": False, "voltage": False, "pwr_ok": manual,
+        "manual_mode": manual, "voltage_mode": voltage_mode,
+    }
     if not reader.ok and not reader.simulate:
         results["note"] = "INA219 not found on I2C - check wiring (i2cdetect -y 1 should show 0x40)"
         return results
@@ -134,16 +167,30 @@ def run_self_check(cfg: dict, reader: INA219Reader, ch224k: CH224KController) ->
     results["ina219"] = ok  # the chip only passes if the I2C read actually worked
     results["v_reading"] = v
     results["i_reading"] = i
-    v_target = float(cfg.get("measurement", {}).get("v_target_5v", 5.0))
-    results["voltage"] = ok and abs(v - v_target) <= 0.25 * v_target
+    if voltage_mode:
+        # No CH224K and no fixed 5 V target: any charger may be attached, so
+        # self-check only proves that a source voltage is present, using the
+        # same threshold the NO_SOURCE state applies.
+        v_present_min = float(cfg.get("session", {}).get("v_present_min_v", 3.0))
+        results["voltage"] = ok and v >= v_present_min
+        results["v_present_min_v"] = v_present_min
+    else:
+        v_target = float(cfg.get("measurement", {}).get("v_target_5v", 5.0))
+        results["voltage"] = ok and abs(v - v_target) <= 0.25 * v_target
     pwr_ok = ch224k.read_pwr_ok()
     if pwr_ok is not None:
         results["pwr_ok"] = bool(pwr_ok)
     else:
-        results["pwr_ok"] = True  # manual mode deliberately has no PWR_OK wire
-        results["pwr_ok_note"] = "manual mode: CH224K PWR_OK is not wired; voltage is verified from INA219/DMM"
+        results["pwr_ok"] = True  # no PWR_OK wire in manual/voltage wiring
+        if voltage_mode:
+            results["pwr_ok_note"] = "voltage mode: no CH224K present; source voltage is verified from the INA219"
+        else:
+            results["pwr_ok_note"] = "manual mode: CH224K PWR_OK is not wired; voltage is verified from INA219/DMM"
     if not results["voltage"]:
-        results["note"] = f"expected ~{v_target} V but read {v:.2f} V - check charger/cable/CH224K"
+        if voltage_mode:
+            results["note"] = f"no source voltage >= {results.get('v_present_min_v', 3.0):.1f} V detected (read {v:.2f} V) - check charger and cable"
+        else:
+            results["note"] = f"expected ~{v_target} V but read {v:.2f} V - check charger/cable/CH224K"
     return results
 
 
@@ -427,9 +474,118 @@ def _run_manual_probe_adaptive(cfg: dict, reader, ch224k, load) -> dict:
     results["_samples"] = session_samples
     return results
 
-def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
-    """DEVELOPMENT_PLAN.md §4.2 — automatic or manually confirmed voltage steps."""
+def _run_voltage_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
+    """Passive probe for the CH224K-removed (--voltage) architecture.
+
+    There is no voltage selection, verification window, or manual
+    confirmation: the charger's present voltage is read directly. Samples are
+    bucketed into real-time voltage classes (``[voltage].class_width_v``,
+    1 V by default); each class is calculated separately at its own
+    class-center target and the per-class feature sets are combined for
+    grading, exactly like the multi-voltage manual flow.
+    """
     pr = cfg.get("probe", {})
+    vcfg = cfg.get("voltage", {})
+    meas = cfg.get("measurement", {})
+    session_cfg = cfg.get("session", {})
+    sim_cfg = cfg.get("sim", {})
+    rate = float(cfg["hardware"].get("sample_rate_hz", 25.0))
+    simulate = bool(cfg.get("hardware", {}).get("simulate", False))
+    total_n = max(1, int(vcfg.get("measurement_readings", pr.get("manual_total_readings", 3000))))
+    class_width = float(vcfg.get("class_width_v", 1.0))
+    r_fixture = float(meas.get("r_fixture_ohm", 0.0))
+    v_present_min = float(session_cfg.get("v_present_min_v", 3.0))
+    duration = total_n / max(rate, 1e-6)
+
+    session_samples: list[Sample] = []
+    next_report_s = [1.0]
+
+    def on_live(sample: Sample) -> None:
+        if sample.t + 1e-9 >= next_report_s[0]:
+            cli.print_live(sample)
+            next_report_s[0] = sample.t + 1.0
+
+    # The phone is the load in this wiring, so normal charge states are
+    # stamped on the samples and hardware safety faults stop the run.
+    tracker = SessionTracker(cfg, phone_expected=True)
+
+    def on_sample(sample: Sample) -> bool:
+        state, _event = tracker.update(sample)
+        on_live(sample)
+        return state != "FAULT"
+
+    def tick(elapsed: float) -> None:
+        if simulate and sim_state is not None:
+            sim_state.current = phone_charge_curve(
+                elapsed,
+                plug_s=float(sim_cfg.get("phone_plug_s", 3.0)),
+                current_a=float(sim_cfg.get("phone_current_a", 1.2)),
+                taper_s=float(sim_cfg.get("phone_taper_s", 60.0)),
+                charged_current_a=float(sim_cfg.get("phone_charged_current_a", 0.03)),
+            )
+
+    samples = Sampler(reader, rate, simulate).run(
+        duration, on_sample=on_sample, tick=tick, state="UNKNOWN"
+    )
+    session_samples.extend(samples)
+
+    feature_sets, combined = compute_features_by_class(
+        samples,
+        class_width,
+        r_fixture=r_fixture,
+        length_m=meas.get("length_m"),
+        i_min=float(meas.get("i_min_compute", 0.10)),
+        i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+        i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+    )
+
+    class_summaries: dict[str, dict] = {}
+    for center, feat in feature_sets.items():
+        class_summaries[str(center)] = {
+            "v_target": center,
+            "n": feat["n_total"],
+            "n_busy": feat["n_busy"],
+            "v_mean": round(feat["V_min"], 3),
+            "i_mean": round(feat["mean_I"], 4),
+            "r_mean_ohm": round(feat["r_mean"], 6),
+        }
+
+    v_present = any(s.valid and s.voltage >= v_present_min for s in samples)
+    results: dict = {
+        "steps": [],
+        "pd_blocked": [],
+        "voltage_mode": True,
+        "manual_voltage_mode": False,
+        "measurement_note": (
+            "No CH224K is present; the charger's own voltage is used directly. "
+            "Readings are bucketed into real-time voltage classes and every "
+            "class is calculated separately, then combined for the final grade."
+        ),
+        "r_fixture": r_fixture,
+        "voltage_classes": class_summaries,
+        "voltage_class_width_v": class_width,
+        "v_present": v_present,
+        # The source rail exists but no charging current flowed at any class.
+        "no_current_all_voltages": bool(v_present) and not feature_sets,
+        "_samples": session_samples,
+    }
+    if combined is not None:
+        results["quality_features"] = combined
+        results["quality_reference_voltage"] = int(round(float(combined["v_target"])))
+        results["quality_reference_note"] = (
+            "all real-time voltage classes were combined for grading and quality analysis"
+        )
+    return results
+
+
+def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
+    """DEVELOPMENT_PLAN.md §4.2 — automatic, manually confirmed, or passive voltage steps."""
+    pr = cfg.get("probe", {})
+    voltage_mode = bool(
+        getattr(ch224k, "voltage_mode", False) or cfg.get("_voltage_requested", False)
+    )
+    if voltage_mode:
+        return _run_voltage_probe(cfg, reader, ch224k, load, sim_state)
     manual = bool(getattr(ch224k, "manual", False) or cfg.get("_manual_requested", False))
     if manual:
         return _run_manual_probe_adaptive(cfg, reader, ch224k, load)
@@ -658,13 +814,20 @@ def run_probe(cfg: dict, reader, ch224k, load, sim_state) -> dict:
 
 def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
                phone_expected: bool) -> tuple[dict | None, SessionMeta, list[Sample], SessionTracker]:
-    """DEVELOPMENT_PLAN.md §4.3 — 5 V only, monitor until CHARGED or timeout."""
+    """DEVELOPMENT_PLAN.md §4.3 — monitor until CHARGED or timeout.
+
+    Legacy wiring runs at 5 V only. In voltage mode (CH224K removed) the
+    charger's present voltage is used and samples are bucketed into real-time
+    voltage classes for feature extraction.
+    """
     meas = cfg.get("measurement", {})
     rate = float(cfg["hardware"].get("sample_rate_hz", 25.0))
     simulate = cfg["hardware"].get("simulate", False)
+    voltage_mode = bool(getattr(ch224k, "voltage_mode", False))
     v_target = float(meas.get("v_target_5v", 5.0))
     r_fixture = float(meas.get("r_fixture_ohm", 0.0))
     length = meas.get("length_m")
+    session_cfg = cfg.get("session", {})
     sim_cfg = cfg.get("sim", {})
 
     if getattr(ch224k, "manual", False):
@@ -708,12 +871,27 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
 
     samples = sampler.run(duration, on_sample=on_sample_live, tick=tick, state="UNKNOWN")
 
-    features = compute_features(
-        samples, v_target=v_target, r_fixture=r_fixture, length_m=length,
-        i_min=float(meas.get("i_min_compute", 0.1)),
-        i_no_load=float(cfg.get("session", {}).get("i_no_load", 0.05)),
-        i_no_phone=float(cfg.get("session", {}).get("i_no_phone_max", 0.01)),
-    )
+    v_present_min = float(session_cfg.get("v_present_min_v", 1.0))
+    if voltage_mode:
+        # Bucket the readings into real-time voltage classes and combine them.
+        _, features = compute_features_by_class(
+            samples,
+            float(cfg.get("voltage", {}).get("class_width_v", 1.0)),
+            r_fixture=r_fixture,
+            length_m=length,
+            i_min=float(meas.get("i_min_compute", 0.1)),
+            i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+            i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+        )
+        if features is not None:
+            v_target = float(features.get("v_target", v_target))
+    else:
+        features = compute_features(
+            samples, v_target=v_target, r_fixture=r_fixture, length_m=length,
+            i_min=float(meas.get("i_min_compute", 0.1)),
+            i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+            i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+        )
     meta = SessionMeta(
         mode="charge",
         v_target=v_target,
@@ -721,7 +899,7 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
         started_at=samples[0].t if samples else 0.0,
         ended_at=samples[-1].t if samples else 0.0,
         charging_detected=any(s.state == "CHARGING" for s in samples) or tracker.ever_charged,
-        v_present=any(s.valid and s.voltage >= 1.0 for s in samples),
+        v_present=any(s.valid and s.voltage >= v_present_min for s in samples),
         phone_expected=phone_expected,
         fault_reason=tracker.fault_reason,
     )
@@ -731,7 +909,13 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
 def main() -> int:
     args = parse_args()
     cli.force_utf8_stdout()
-    cfg = load_config(args.config, simulate=args.simulate, demo=args.demo, manual=args.manual)
+    cfg = load_config(
+        args.config,
+        simulate=args.simulate,
+        demo=args.demo,
+        manual=args.manual,
+        voltage=args.voltage,
+    )
     simulate = cfg["hardware"].get("simulate", False)
 
     cli.print_banner()
@@ -795,9 +979,16 @@ def main() -> int:
             meta.probe = probe
 
         if args.mode == "probe":
+            if probe.get("voltage_mode"):
+                # Passive mode: voltage presence comes from the measured source
+                # rail; quality features come from the combined voltage classes.
+                meta.v_present = bool(probe.get("v_present", False))
+                if probe.get("quality_features"):
+                    features = probe["quality_features"]
+                    meta.v_target = float(features.get("v_target", meta.v_target))
             # A manual session can still prove that voltage is present even if
             # the INA219 branch has no current. Do not mislabel that as NO_SOURCE.
-            if probe.get("manual_readings"):
+            elif probe.get("manual_readings"):
                 meta.v_present = True
             # In manual inline-phone mode, grade from all supported-voltage
             # measurement datasets. Unsupported ranges are excluded.
@@ -835,6 +1026,10 @@ def main() -> int:
             "fault_reason": meta.fault_reason,
             "probe": probe,
             "manual_voltage_mode": bool(probe.get("manual_voltage_mode", False)),
+            "voltage_mode": bool(
+                probe.get("voltage_mode", False)
+                or getattr(ch224k, "voltage_mode", False)
+            ),
             "length_m": meta.length_m,
         }
         verdict = rule_verdict(features, verdict_meta, cfg)

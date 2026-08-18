@@ -34,8 +34,11 @@ class LoadController:
         r1 = float(ld.get("divider_r1_ohm", 100000.0))
         r2 = float(ld.get("divider_r2_ohm", 10000.0))
         self._setpoint_vmax = 3.3 * r2 / (r1 + r2)  # ~0.30 V -> ~3 A
+        # In manual (Y-junction) and voltage (CH224K removed) wiring there is
+        # no controlled-load or phone-isolation GPIO; the phone is the load.
         self.manual = (
-            str(cfg.get("ch224k", {}).get("control_mode", "gpio")).lower() == "manual"
+            str(cfg.get("ch224k", {}).get("control_mode", "gpio")).lower()
+            in ("manual", "voltage")
             and not self.simulate
         )
         self._gpio = None

@@ -38,6 +38,7 @@ def evaluate(
     ``meta`` keys: session_id, mode, v_present, charging_detected,
     phone_expected, fault_reason, probe (dict with probe results).
     """
+    voltage_mode = bool(meta.get("voltage_mode", False))
     base = {
         "session_id": meta.get("session_id", ""),
         "model": "rules-v1",
@@ -47,7 +48,12 @@ def evaluate(
         "confidence": 0.0,
         "evidence": [],
         "limitations": [
-            "single measurement point; loop R includes connectors and the CH224K path (baseline subtracted)",
+            (
+                # No CH224K in the passive architecture.
+                "single measurement point; loop R includes connectors and the fixture path (baseline subtracted)"
+                if voltage_mode
+                else "single measurement point; loop R includes connectors and the CH224K path (baseline subtracted)"
+            ),
             "absolute R biased by charger tolerance (+/-5%); same-current differential calibration mitigates",
         ],
     }
@@ -67,17 +73,23 @@ def evaluate(
     # --- 2. no/insufficient charging data ---
     probe = meta.get("probe") or {}
     if features is None and probe.get("no_current_all_voltages"):
-        tested_voltages = probe.get("support_flags") or {}
-        tested_text = ", ".join(
-            f"{float(v):g} V" for v in tested_voltages
-        ) or "configured voltage ranges"
+        if voltage_mode:
+            # No CH224K and no fixed voltage classes: the charger simply
+            # provided a rail that never drew charging current.
+            evidence = ["no charging current measured from the present source voltage"]
+        else:
+            tested_voltages = probe.get("support_flags") or {}
+            tested_text = ", ".join(
+                f"{float(v):g} V" for v in tested_voltages
+            ) or "configured voltage ranges"
+            evidence = [
+                "no charging current measured during VERIFICATION checks at "
+                f"{tested_text}"
+            ]
         base.update(
             verdict="NO_CURRENT_ALL_VOLTAGES",
             tags=["NO_CURRENT_ALL_VOLTAGES"],
-            evidence=[
-                "no charging current measured during VERIFICATION checks at "
-                f"{tested_text}"
-            ],
+            evidence=evidence,
         )
         return base
     if features is None:
@@ -167,7 +179,11 @@ def evaluate(
 
     support_flags = probe.get("support_flags") or {}
     reference_v = probe.get("quality_reference_voltage")
-    if reference_v and int(reference_v) != 5:
+    if voltage_mode:
+        # The whole architecture is built around the charger's own voltage:
+        # there is no negotiated reference, so no fallback tag or penalty.
+        confidence_penalty = 1.0
+    elif reference_v and int(reference_v) != 5:
         tags.append("FALLBACK_VOLTAGE_REFERENCE")
         base["limitations"].append(
             "a non-5 V range was the display reference; all supported voltage datasets were combined, but compare with same-voltage calibration before treating the grade as universal"

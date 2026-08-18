@@ -5,6 +5,11 @@ and requests a fixed PDO voltage (5/9/12/15/20 V) selected by the SEL
 strap pins. Driving the straps from Pi GPIO lets the software step the
 negotiated voltage mid-test — this is what makes multi-voltage probing
 possible.
+
+``control_mode = "voltage"`` models the CH224K-removed architecture: the
+charger is wired straight to the cable/INA219/phone and its own voltage is
+used directly. Every controller call becomes a no-op and the software never
+requests or verifies a negotiated rail.
 """
 from __future__ import annotations
 
@@ -36,12 +41,15 @@ class CH224KController:
         # In this mode the operator changes SEL straps by hand and confirms
         # the measured rail at the terminal.
         self.manual = (str(ch.get("control_mode", "gpio")).lower() == "manual") and not self.simulate
+        # CH224K removed entirely: the charger's present voltage is used
+        # directly and no voltage is ever requested or verified.
+        self.voltage_mode = str(ch.get("control_mode", "gpio")).lower() == "voltage"
         self._gpio = None
         self.voltage = None
 
         if self.simulate:
             self._sim = SimulatedCH224K(sim_state if sim_state is not None else SimState())
-        elif not self.manual:
+        elif not self.manual and not self.voltage_mode:
             self._init_gpio()
 
     def _init_gpio(self) -> None:  # pragma: no cover - requires Pi
@@ -67,6 +75,11 @@ class CH224KController:
         The actual success is confirmed by the caller reading ``read_pwr_ok()``
         and verifying the measured bus voltage (probe logic in main.py).
         """
+        if self.voltage_mode:
+            # CH224K removed: the charger's voltage is present regardless of
+            # any request. The caller reads the INA219 to learn the rail.
+            self.voltage = None
+            return True
         code = self._truth.get(round(float(target_v)))
         if code is None:
             raise ValueError(f"CH224K cannot request {target_v} V; supported: {sorted(self._truth)}")
@@ -89,6 +102,8 @@ class CH224KController:
         return True
 
     def read_pwr_ok(self) -> bool | None:
+        if self.voltage_mode:
+            return None  # No CH224K is present in this architecture.
         if self.simulate:
             return self._sim.read_pwr_ok()
         if self.manual:
@@ -97,6 +112,8 @@ class CH224KController:
         return bool(value) if self._pwr_ok_active_high else not bool(value)
 
     def enable(self, on: bool) -> None:
+        if self.voltage_mode:
+            return  # No CH224K is present in this architecture.
         if self.simulate:
             self._sim.enable(on)
         elif self.manual:

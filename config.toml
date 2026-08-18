@@ -26,7 +26,8 @@ phone_present = 6         # optional comparator input
 
 [ch224k]
 # gpio = legacy protected wiring; manual = temporary Y-junction wiring
-# (SEL0/1/2, EN and PWR_OK are not connected to the Pi).
+# (SEL0/1/2, EN and PWR_OK are not connected to the Pi); voltage = CH224K
+# removed entirely (the charger's own voltage is used directly).
 control_mode = "manual"
 pwr_ok_polarity = "high"  # "high" = PWR_OK HIGH means PD contract OK; invert if your module differs
 renegotiate_wait_s = 1.5  # settle delay after changing SEL straps (VBUS dips ~0.3-1 s)
@@ -47,6 +48,15 @@ pwm_freq_hz = 1000
 r_sense_ohm = 0.1
 divider_r1_ohm = 100000
 divider_r2_ohm = 10000
+
+[voltage]
+# Passive architecture (--voltage): no CH224K. The charger's own voltage is
+# used directly and readings are bucketed into real-time voltage classes;
+# each class is calculated separately, then combined for the final grade.
+enabled = false
+class_width_v = 1.0        # 4.5-5.5, 5.5-6.5, ... (class center = rounded voltage)
+v_present_min_v = 3.0      # below this the rail counts as NO_SOURCE
+measurement_readings = 3000  # total readings across all voltage classes
 
 [probe]
 voltages = [5, 9, 12]     # manual support checks and measurement ranges
@@ -116,6 +126,7 @@ r_fixture_ohm = 0.05
 heating_k = 0.0004        # R grows ~ I^2 * heating_k * dt (self-heating simulation)
 v_noise = 0.004
 i_noise = 0.008
+source_voltage_v = 5.0    # charger voltage simulated in --voltage mode (no CH224K)
 # pd_blocked_above = 9   # (optional) set a number like 9 to simulate a cable that
                            # blocks CC/PD signaling above that voltage -> PD_BLOCKED verdict
 short = false
