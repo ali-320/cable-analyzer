@@ -75,7 +75,6 @@ The CH224k is removed, the cable is connected to the sensor now, and we the phon
 Now the phones even go in fast charging mode which was not possible before.
 
 14. With the above appraoch, we can no longer divide the voltage in the 3 classes of 5V, 9V, 12V. 
-
 [SOLUTION]
 I came up with a division
 of range based voltages, which works as that 4.5 to 5.5V is regarded as 5V class, and so for all other voltages. With this approach
@@ -88,7 +87,10 @@ to zero, which is just wrong.
 [SOLUTION#2]
 Take all the readings of the voltages and then apply regerssion on it to figure out that what is the voltage that the mobile is
 requesting from the charger.
-[RESULT:]
+[RESULT:PASSED]
+Now the r_mean and the r_dvdi are no longer zero. The only condition for this to work effectively is that the voltage
+and current should change considerably for the intercept to be calculated. Will try the approach below to see it's results
+as well.
 
 [SOLTUION#3]
 Take the voltages into the classes of 5V, 9V, 12V, 15V, 20V. Since these were the readings on the CH224K, and could be considered 
