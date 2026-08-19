@@ -127,7 +127,20 @@ def compute_features(
         v_source_est = v_target
     r_loop = [max(0.0, (v_source_est - s.voltage) / s.current) for s in busy]
     r_cable = [max(0.0, r - r_fixture) for r in r_loop]
-    r_dvdi = max(0.0, -slope_v_i - r_fixture) if slope_v_i < 0 else None
+
+    # r_dvdi: independent cable resistance estimate from the V-vs-I slope.
+    # In CC mode (current ramping up), the slope reflects cable resistance
+    # and gives a meaningful estimate.  In CV mode the phone regulates
+    # voltage to be nearly constant regardless of current, so the slope is
+    # near-zero and r_dvdi from the slope would be 0.  Fall back to the
+    # intercept-based r_mean in that case — it is the more reliable
+    # estimate when the phone's charging IC masks the cable drop.
+    r_dvdi_slope = max(0.0, -slope_v_i - r_fixture) if slope_v_i < 0 else None
+    r_dvdi_mean = mean(r_cable) if r_cable else None
+    r_dvdi = (
+        r_dvdi_slope if (r_dvdi_slope is not None and r_dvdi_slope > 0)
+        else r_dvdi_mean
+    )
 
     # sigma_V = min detrended std over a sliding ~10 s sub-window of the busy
     # samples. The phone's CC->CV taper is a slow, near-linear V rise: a single
