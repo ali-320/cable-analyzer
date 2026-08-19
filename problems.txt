@@ -69,6 +69,34 @@ range should not be 9 +- 1 V, but should be 9 +0.5 V and 9 - 1.5 V or 9 - 2 V.
 It was not working because of a soldering issue and the code now picking up the correct libraries. Basically working on
 circuit python but Raspberry pi supports C python. So changed and everything worked beautifully.
 
+13. The CH224K is limiting current for the mobile.
+[DONE]
+The CH224k is removed, the cable is connected to the sensor now, and we the phone successfully draws the full amount of current.
+Now the phones even go in fast charging mode which was not possible before.
+
+14. With the above appraoch, we can no longer divide the voltage in the 3 classes of 5V, 9V, 12V. 
+[SOLUTION]
+I came up with a division
+of range based voltages, which works as that 4.5 to 5.5V is regarded as 5V class, and so for all other voltages. With this approach
+we can make classes dynamically at run time.
+[FAILED]
+It failed because with this class approach, the voltage of 8.1V was regarded to belong in the 8V class. Now during resistance
+calculation, class_V - V_measured, gave negative and very minor result casuing the resistance of the cable to be measured very close
+to zero, which is just wrong.
+[SOLUTION#2]
+Take all the readings of the voltages and then apply regerssion on it to figure out that what is the voltage that the mobile is
+requesting from the charger.
+[RESULT:]
+
+[SOLTUION#3]
+Take the voltages into the classes of 5V, 9V, 12V, 15V, 20V. Since these were the readings on the CH224K, and could be considered 
+universal (assumption to check).
+
+
+15. The voltage shown on the mobile has a delay of greater than 1 sec, due to the processing of display.py.
+[SOLUTION]
+The readings are continuously stored in the .csv and then read from the .csv to show on the display. Make it hardcoded in the
+main.py or the display.py such that the readings shown on the display are of x.00 sec.
 
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
@@ -90,3 +118,7 @@ The IDLE name has been replaced by the VERIFICATION name.
 data to the database.
 [DONE]
 Instead of configuring a local database I configured a Supbase to test that if remote data sending is possible or not.
+
+5. Connect an external display to the hardware to show real-time values as well.
+[DONE]
+The display is connected and is operated using the dispaly.py.
