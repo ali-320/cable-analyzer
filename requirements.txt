@@ -16,3 +16,10 @@ adafruit-blinka>=1.7.0
 Pillow>=9.0.0
 # SPI/GPIO access on the Pi:
 #   sudo apt install -y python3-spidev
+
+# Following libraries might also be need to installed if the above are not sufficient
+# pip install adafruit-circuitpython-st7735r
+# pip install adafruit-circuitpython-displayio-shim
+# pip install adafruit-circuitpython-bitmapfont
+# pip install adafruit-circuitpython-display-text
+# pip install adafruit-circuitpython-rgb-display
