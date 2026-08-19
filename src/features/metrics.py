@@ -3,16 +3,20 @@
 Pure-Python statistics (no numpy) so the code runs anywhere and the math is
 easy to audit against the plan:
 
-    R_loop(s) = max(0, (V_target - V_load)/I)      for I >= i_min_compute
-    R_cable   = R_loop - R_fixture                 (calibrated baseline)
-    dR/dt     = linear-regression slope of R_cable over time  [mΩ/min]
-    dV/dI     = linear-regression slope of V_load vs I         [≈ -R]
+    V-vs-I regression:  V_load = intercept + slope × I
+    V_source            ≈ intercept   (voltage at zero current)
+    R_loop(s)           = max(0, (intercept - V_load)/I)  for I >= i_min_compute
+    R_cable             = R_loop - R_fixture              (calibrated baseline)
+    dR/dt               = linear-regression slope of R_cable over time [mΩ/min]
+    dV/dI               = slope of V_load vs I                          [≈ -R]
 
 Voltage-class mode (CH224K removed) buckets readings into real-time voltage
 classes (1 V wide by default) so the charger's own voltage is used directly:
 4.67 V falls into the 4.5-5.5 V class (center 5), 5.8 V into 5.5-6.5 V
-(center 6), and so on. Each class is calculated separately at its own
-class-center target and the per-class feature sets are combined for grading.
+(center 6), and so on.  Each class is calculated separately at its own
+class-center target.  The V-vs-I regression estimates the source voltage
+from the data (intercept), so the class center is only used for display —
+not for resistance math.  Per-class feature sets are combined for grading.
 """
 from __future__ import annotations
 
@@ -100,18 +104,29 @@ def compute_features(
     if len(busy_all) < min_busy_samples:
         return None
 
-    peak_i = max(s.current for s in busy_all)
-    busy = [s for s in busy_all if s.current >= steady_frac * peak_i]
-    if len(busy) < min_busy_samples:
-        busy = busy_all  # fall back: too little steady data
+    # Use all busy samples — the i_min threshold and CHARGING state already
+    # exclude idle / no-phone samples.  The old steady_frac filter (>=50 %
+    # of peak) discarded most valid CV-mode data and hurt confidence.
+    busy = busy_all
 
-    r_loop = [max(0.0, (v_target - s.voltage) / s.current) for s in busy]
-    r_cable = [max(0.0, r - r_fixture) for r in r_loop]
     vs = [s.voltage for s in busy]
     is_ = [s.current for s in busy]
 
+    # V-vs-I regression FIRST: the y-intercept estimates the true source
+    # voltage (V_load at zero current = no cable drop), and the slope gives
+    # -R_cable.  Using the intercept as V_source makes the resistance formula
+    # correct in both --manual mode (intercept ≈ CH224K target) and --voltage
+    # mode (intercept ≈ actual charger voltage).  Fall back to v_target when
+    # current variation is too small for a reliable regression.
     ts = [s.t for s in busy]
-    slope_v_i, _, _ = linreg(is_, vs)              # V vs I -> slope ≈ -R_loop
+    slope_v_i, intercept, _ = linreg(is_, vs)
+    i_spread = max(is_) - min(is_)
+    if slope_v_i < 0 and i_spread >= 0.1:
+        v_source_est = intercept
+    else:
+        v_source_est = v_target
+    r_loop = [max(0.0, (v_source_est - s.voltage) / s.current) for s in busy]
+    r_cable = [max(0.0, r - r_fixture) for r in r_loop]
     r_dvdi = max(0.0, -slope_v_i - r_fixture) if slope_v_i < 0 else None
 
     # sigma_V = min detrended std over a sliding ~10 s sub-window of the busy

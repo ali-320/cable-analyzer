@@ -3,7 +3,7 @@ import unittest
 
 from tests.helpers import make_samples
 
-from src.features.metrics import combine_features, compute_features, linreg, percentile, stdev
+from src.features.metrics import combine_features, compute_features, compute_features_by_class, linreg, percentile, stdev
 from src.telemetry.models import Sample
 
 
@@ -136,6 +136,151 @@ class TestFeatures(unittest.TestCase):
             samples[k].current = 0.005
         f = compute_features(samples, v_target=5.0)
         self.assertAlmostEqual(f["interruption_frac"], 5 / 200, places=3)
+
+
+class TestVoltageModeResistanceCalculation(unittest.TestCase):
+    """Regression tests for the intercept-based resistance formula.
+
+    In voltage mode the class center (v_target) is NOT the true source voltage;
+    the V-vs-I regression intercept must be used instead.
+    """
+
+    def test_r_mean_nonzero_when_class_center_differs_from_source(self):
+        """Simulate an 8.1 V charger; class center = 8.0 V.
+
+        V_load = 8.1 - I * 0.2, but compute_features sees v_target = 8.0.
+        Old formula: (8.0 - V_load)/I ≈ (8.0 - 8.1 + I*0.2)/I = -0.1/I + 0.2
+          → negative for low current, clamped to 0 → r_mean ≈ 0.
+        New formula: intercept ≈ 8.1, so (8.1 - V_load)/I = 0.2 always.
+        """
+        r_cable = 0.2
+        source_v = 8.1
+        samples = [
+            Sample(
+                t=i * 0.04,
+                voltage=source_v - current * r_cable,
+                current=current,
+                power=(source_v - current * r_cable) * current,
+                state="CHARGING",
+                valid=True,
+            )
+            for i, current in enumerate([0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0])
+        ]
+        f = compute_features(samples, v_target=8.0, r_fixture=0.0)
+        self.assertIsNotNone(f)
+        self.assertAlmostEqual(f["r_mean"], r_cable, places=3)
+        self.assertGreater(f["r_mean"], 0.0)
+
+    def test_r_dvdi_nonzero_with_varying_current_and_offset_target(self):
+        """The dV/dI slope should give R_cable regardless of v_target offset."""
+        r_cable = 0.25
+        source_v = 9.15
+        samples = [
+            Sample(
+                t=i * 0.04,
+                voltage=source_v - current * r_cable,
+                current=current,
+                power=(source_v - current * r_cable) * current,
+                state="CHARGING",
+                valid=True,
+            )
+            for i, current in enumerate([0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5])
+        ]
+        f = compute_features(samples, v_target=9.0, r_fixture=0.0)
+        self.assertIsNotNone(f)
+        self.assertAlmostEqual(f["r_dvdi"], r_cable, places=2)
+        self.assertGreater(f["r_dvdi"], 0.0)
+
+    def test_fixture_subtraction_with_offset_target(self):
+        """Fixture subtraction should work with the intercept path too."""
+        r_cable = 0.3
+        r_fixture = 0.05
+        source_v = 5.15
+        samples = [
+            Sample(
+                t=i * 0.04,
+                voltage=source_v - current * r_cable,
+                current=current,
+                power=(source_v - current * r_cable) * current,
+                state="CHARGING",
+                valid=True,
+            )
+            for i, current in enumerate([0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0])
+        ]
+        f = compute_features(samples, v_target=5.0, r_fixture=r_fixture)
+        self.assertIsNotNone(f)
+        self.assertAlmostEqual(f["r_mean"], r_cable - r_fixture, places=3)
+
+    def test_fallback_to_v_target_when_current_is_constant(self):
+        """When current is constant (i_spread < 0.1), the regression is
+        unreliable so the code falls back to v_target.  r_loop may then be
+        near-zero if v_target ≈ measured voltage — this is expected and honest.
+        """
+        r_cable = 0.2
+        source_v = 8.1
+        # All samples at exactly the same current → i_spread = 0
+        samples = [
+            Sample(
+                t=i * 0.04,
+                voltage=source_v - 1.0 * r_cable,
+                current=1.0,
+                power=(source_v - 1.0 * r_cable) * 1.0,
+                state="CHARGING",
+                valid=True,
+            )
+            for i in range(30)
+        ]
+        f = compute_features(samples, v_target=8.0, r_fixture=0.0)
+        self.assertIsNotNone(f)
+        # With constant current, regression fallback uses v_target; the
+        # per-sample r_loop = (8.0 - (8.1 - 0.2)) / 1.0 = 0.1, which is
+        # the difference between class center and (source - drop), not the
+        # true cable resistance.  This is acceptable — we cannot measure R
+        # without current variation.
+        self.assertIsNotNone(f["r_mean"])
+
+    def test_compute_features_by_class_with_offset_source(self):
+        """Voltage-class bucketing should produce non-zero r_mean for each
+        class when current varies within each class.
+        """
+        r_cable = 0.15
+        # Simulate a 5.15 V source and an 8.15 V source mixed together
+        samples_5v = [
+            Sample(
+                t=i * 0.04,
+                voltage=5.15 - c * r_cable,
+                current=c,
+                power=(5.15 - c * r_cable) * c,
+                state="CHARGING",
+                valid=True,
+            )
+            for i, c in enumerate([0.5, 0.8, 1.0, 1.2, 1.5])
+        ]
+        samples_9v = [
+            Sample(
+                t=0.2 + i * 0.04,
+                voltage=8.15 - c * r_cable,
+                current=c,
+                power=(8.15 - c * r_cable) * c,
+                state="CHARGING",
+                valid=True,
+            )
+            for i, c in enumerate([0.5, 0.8, 1.0, 1.2, 1.5])
+        ]
+        feature_sets, combined = compute_features_by_class(
+            samples_5v + samples_9v, 1.0, r_fixture=0.0,
+        )
+        self.assertIn(5.0, feature_sets)
+        # 8.15V source with 0.15Ω cable: measured V ranges 7.925-8.075V,
+        # which rounds to class 8.0 (not 9.0)
+        self.assertIn(8.0, feature_sets)
+        self.assertEqual(len(feature_sets), 2,
+                         msg=f"Expected 2 classes, got {list(feature_sets.keys())}")
+        for center, feat in feature_sets.items():
+            self.assertGreater(feat["r_mean"], 0.0,
+                               msg=f"r_mean should be non-zero for class {center}")
+        self.assertIsNotNone(combined)
+        self.assertGreater(combined["r_mean"], 0.0)
 
 
 if __name__ == "__main__":
