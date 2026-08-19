@@ -75,6 +75,7 @@ The CH224k is removed, the cable is connected to the sensor now, and we the phon
 Now the phones even go in fast charging mode which was not possible before.
 
 14. With the above appraoch, we can no longer divide the voltage in the 3 classes of 5V, 9V, 12V. 
+
 [SOLUTION]
 I came up with a division
 of range based voltages, which works as that 4.5 to 5.5V is regarded as 5V class, and so for all other voltages. With this approach
@@ -83,6 +84,7 @@ we can make classes dynamically at run time.
 It failed because with this class approach, the voltage of 8.1V was regarded to belong in the 8V class. Now during resistance
 calculation, class_V - V_measured, gave negative and very minor result casuing the resistance of the cable to be measured very close
 to zero, which is just wrong.
+
 [SOLUTION#2]
 Take all the readings of the voltages and then apply regerssion on it to figure out that what is the voltage that the mobile is
 requesting from the charger.
