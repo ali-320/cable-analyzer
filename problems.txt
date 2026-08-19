@@ -101,6 +101,13 @@ universal (assumption to check).
 [SOLUTION]
 The readings are continuously stored in the .csv and then read from the .csv to show on the display. Make it hardcoded in the
 main.py or the display.py such that the readings shown on the display are of x.00 sec.
+[DONE]
+The display module was taking too much time causing the delay in the sequential logic. So, I changed the logic to the
+parallel programming.
+
+16. The voltage is currently not being dropped because the sensor is connected at the middle of the cable.
+[SOLUTION]
+will be resolved with the final connector version with PCB.
 
 Improvement
 1. The current for charging is 0.xx, for charged is 0.0xx, and for IDLE is 0.00xx
