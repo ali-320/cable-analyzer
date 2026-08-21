@@ -3,13 +3,16 @@ Description=RADWI Cable-Quality Analyzer - Continuous Verdict Loop
 After=network.target
 
 [Service]
-Type=simple
+Type=forking
+User=pi
+Group=pi
 WorkingDirectory=/home/pi/project-ali
-ExecStart=/home/pi/project-ali/.venv/bin/python3 -m src.main --voltage --continuous
+Environment=TMPDIR=/tmp
+ExecStartPre=-/usr/bin/tmux kill-session -t radwi
+ExecStart=/usr/bin/tmux new-session -d -s radwi /home/pi/project-ali/.venv/bin/python3 -m src.main --voltage --continuous
+ExecStop=/usr/bin/tmux kill-session -t radwi
 Restart=on-failure
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
 TimeoutStartSec=30
 StartLimitIntervalSec=60
 StartLimitBurst=5

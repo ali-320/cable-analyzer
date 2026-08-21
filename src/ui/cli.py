@@ -145,8 +145,13 @@ def setup_display() -> None:
     if _ST7735S is not None and display is None:
         try:
             display = _ST7735S()
-        except Exception:
+        except Exception as exc:
+            import sys
+            print(f"  [display] init failed: {exc}", file=sys.stderr)
             display = None
+    elif _ST7735S is None:
+        import sys
+        print("  [display] ST7735S module unavailable (displayio/board import failed)", file=sys.stderr)
 
 
 def close_display() -> None:

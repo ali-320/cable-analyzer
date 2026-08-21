@@ -6,4 +6,6 @@ config.local.toml
 remote.txt
 code_3.zip
 code_4.zip
+data/sessions.db-shm
+data/sessions.db-wal
 code_5.zip

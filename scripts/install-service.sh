@@ -1,34 +1,45 @@
 #!/usr/bin/env bash
-# Install the RADWI continuous-mode systemd service on a Raspberry Pi.
-# Run this once after the first deployment:
+# install-service.sh — install the RADWI continuous-mode systemd service.
+#
+# Usage (on the Pi):
 #   cd project-ali
 #   bash scripts/install-service.sh
-#
-# To manage the service:
 #   sudo systemctl start radwi-continuous
-#   sudo systemctl stop radwi-continuous
-#   sudo systemctl status radwi-continuous
-#   sudo journalctl -u radwi-continuous -f
-
+#
+# To see live terminal output:
+#   tmux attach -t radwi
+#
+# To detach from tmux without stopping the service:
+#   Ctrl+B then D
 set -euo pipefail
 
-SERVICE_FILE="$(dirname "$0")/radwi-continuous.service"
-TARGET="/etc/systemd/system/radwi-continuous.service"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVICE_FILE="$SCRIPT_DIR/radwi-continuous.service"
+DEST="/etc/systemd/system/radwi-continuous.service"
 
-if [ ! -f "$SERVICE_FILE" ]; then
-    echo "ERROR: $SERVICE_FILE not found" >&2
-    exit 1
+# ── install tmux if missing ───────────────────────────────────────
+if ! command -v tmux &>/dev/null; then
+    echo "Installing tmux …"
+    sudo apt-get update -qq && sudo apt-get install -y tmux
 fi
 
-echo "Installing RADWI continuous service ..."
-sudo cp "$SERVICE_FILE" "$TARGET"
+# ── copy service file ─────────────────────────────────────────────
+echo "Copying service file to $DEST"
+sudo cp "$SERVICE_FILE" "$DEST"
 sudo systemctl daemon-reload
-sudo systemctl enable radwi-continuous
 
 echo ""
-echo "Done. The service is installed and enabled."
+echo "Service installed.  To start now:"
+echo "  sudo systemctl start radwi-continuous"
 echo ""
-echo "  To start now:   sudo systemctl start radwi-continuous"
-echo "  To stop:         sudo systemctl stop radwi-continuous"
-echo "  To see logs:     sudo journalctl -u radwi-continuous -f"
-echo "  Auto-starts on boot."
+echo "To see live terminal output:"
+echo "  tmux attach -t radwi"
+echo ""
+echo "To detach (service keeps running):"
+echo "  Press Ctrl+B then D"
+echo ""
+echo "To stop:"
+echo "  sudo systemctl stop radwi-continuous"
+echo ""
+echo "To enable on boot:"
+echo "  sudo systemctl enable radwi-continuous"
