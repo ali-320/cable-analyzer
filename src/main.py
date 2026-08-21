@@ -72,6 +72,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--phone-expected", action="store_true", help="a phone is attached (enables OPEN detection)")
     ap.add_argument("--demo", action="store_true", help="short simulated run with no hardware")
     ap.add_argument("--json", action="store_true", help="print verdict as JSON")
+    ap.add_argument("--continuous", action="store_true",
+                    help="continuous verdict loop: sample until n_busy >= threshold, give verdict, sync, restart")
     return ap.parse_args()
 
 
@@ -906,6 +908,277 @@ def run_charge(cfg: dict, reader, ch224k, load, sim_state, duration: float,
     return features, meta, samples, tracker
 
 
+def run_continuous(cfg: dict, reader, ch224k, load, sim_state, storage) -> None:
+    """Continuous verdict loop (method 3).
+
+    Sample indefinitely.  When BUSY-state readings reach the configured
+    threshold (``session.min_busy_readings``, default 3000), compute
+    features using voltage-class bucketing (``--voltage``) or fixed-target
+    features, generate a verdict, save to storage, sync remotely, then
+    restart the cycle.
+
+    This ensures no verdict is produced when NO_PHONE or NO_SOURCE is
+    connected -- only real charging data triggers a grade.
+    """
+    meas = cfg.get("measurement", {})
+    vcfg = cfg.get("voltage", {})
+    rate = float(cfg["hardware"].get("sample_rate_hz", 25.0))
+    simulate = cfg["hardware"].get("simulate", False)
+    r_fixture = float(meas.get("r_fixture_ohm", 0.0))
+    length = meas.get("length_m")
+    phone_expected = True
+    min_busy = int(cfg.get("session", {}).get("min_busy_readings", 3000))
+    i_min = float(meas.get("i_min_compute", 0.10))
+    v_present_min = float(cfg.get("session", {}).get("v_present_min_v", 1.0))
+    session_cfg = cfg.get("session", {})
+    sim_cfg = cfg.get("sim", {})
+    class_width = float(vcfg.get("class_width_v", 1.0))
+    voltage_mode = bool(
+        getattr(ch224k, "voltage_mode", False) or cfg.get("_voltage_requested", False)
+    )
+    v_target = float(meas.get("v_target_5v", 5.0))
+
+    load.phone_switch(True)
+
+    print(f"  continuous mode: waiting for {min_busy} BUSY readings before each verdict")
+    if voltage_mode:
+        print(f"  voltage mode: readings bucketed into {class_width:.1f} V classes")
+    print(f"  sampling at {rate:.0f} Hz ... Ctrl-C to stop\n")
+
+    cycle = 0
+    try:
+        while True:
+            cycle += 1
+            print(f"  --- cycle {cycle} ---")
+            tracker = SessionTracker(cfg, v_target=v_target, phone_expected=phone_expected)
+            cycle_samples: list[Sample] = []
+            next_report_s = 1.0
+            n_busy_count = 0
+
+            def on_sample(s: Sample, _tracker=tracker) -> bool:
+                nonlocal next_report_s, n_busy_count
+                state, _event = _tracker.update(s)
+                if state == "FAULT":
+                    return False
+                # Count BUSY readings (same criteria as metrics._busy)
+                if s.valid and s.current >= i_min and s.state in {"CHARGING", "PROBE", "UNKNOWN", ""}:
+                    n_busy_count += 1
+                # Live terminal report every 1 second
+                if s.t + 1e-9 >= next_report_s:
+                    cli.print_live(s)
+                    next_report_s = s.t + 1.0
+                    if min_busy > 0:
+                        pct = min(100, n_busy_count * 100 // min_busy)
+                        print(f"              busy: {n_busy_count}/{min_busy} ({pct}%)")
+                # Stop when we have enough busy samples
+                if n_busy_count >= min_busy:
+                    return False
+                return True
+
+            def tick(elapsed: float) -> None:
+                if simulate and sim_state is not None:
+                    sim_state.current = phone_charge_curve(
+                        elapsed,
+                        plug_s=float(sim_cfg.get("phone_plug_s", 3.0)),
+                        current_a=float(sim_cfg.get("phone_current_a", 1.2)),
+                        taper_s=float(sim_cfg.get("phone_taper_s", 60.0)),
+                        charged_current_a=float(sim_cfg.get("phone_charged_current_a", 0.03)),
+                    )
+
+            sampler = Sampler(reader, rate, simulate)
+            # Use a large duration; on_sample stops us early.
+            samples = sampler.run(
+                7200.0 if simulate else 86400.0,
+                on_sample=on_sample,
+                tick=tick,
+                state="UNKNOWN",
+            )
+            cycle_samples.extend(samples)
+
+            # --- Fault early exit ---
+            if tracker.fault_reason:
+                print(f"\n  FAULT detected: {tracker.fault_reason}")
+                features, probe_results = _continuous_compute(
+                    cfg, cycle_samples, voltage_mode, v_target, r_fixture, length,
+                    i_min, class_width, v_present_min,
+                )
+                meta = SessionMeta(
+                    mode="continuous", v_target=v_target, length_m=length,
+                    started_at=cycle_samples[0].t if cycle_samples else 0.0,
+                    ended_at=cycle_samples[-1].t if cycle_samples else 0.0,
+                    charging_detected=any(s.state == "CHARGING" for s in cycle_samples),
+                    v_present=any(s.valid and s.voltage >= v_present_min for s in cycle_samples),
+                    phone_expected=phone_expected,
+                    fault_reason=tracker.fault_reason,
+                )
+                _continuous_verdict(
+                    cfg, storage, features, probe_results, meta, cycle_samples,
+                    voltage_mode,
+                )
+                break
+
+            # --- Insufficient busy data (no phone / no source) ---
+            if n_busy_count < min_busy:
+                v_present = any(s.valid and s.voltage >= v_present_min for s in cycle_samples)
+                if not v_present:
+                    print("  no source voltage detected -- waiting for charger connection")
+                else:
+                    print(f"  only {n_busy_count}/{min_busy} busy readings (phone may not be charging)")
+                import time as _time
+                _time.sleep(2.0)
+                continue
+
+            # --- Enough data: compute features + verdict ---
+            features, probe_results = _continuous_compute(
+                cfg, cycle_samples, voltage_mode, v_target, r_fixture, length,
+                i_min, class_width, v_present_min,
+            )
+            meta = SessionMeta(
+                mode="continuous", v_target=v_target, length_m=length,
+                started_at=cycle_samples[0].t if cycle_samples else 0.0,
+                ended_at=cycle_samples[-1].t if cycle_samples else 0.0,
+                charging_detected=any(s.state == "CHARGING" for s in cycle_samples),
+                v_present=any(s.valid and s.voltage >= v_present_min for s in cycle_samples),
+                phone_expected=phone_expected,
+                fault_reason=tracker.fault_reason,
+            )
+            _continuous_verdict(
+                cfg, storage, features, probe_results, meta, cycle_samples,
+                voltage_mode,
+            )
+            print(f"  --- cycle {cycle} complete: {n_busy_count} busy, "
+                  f"{len(cycle_samples)} total ---\n")
+
+    except KeyboardInterrupt:
+        print("\n  continuous mode stopped by user")
+    finally:
+        load.phone_switch(True)
+
+
+def _continuous_compute(
+    cfg: dict,
+    samples: list[Sample],
+    voltage_mode: bool,
+    v_target: float,
+    r_fixture: float,
+    length: float | None,
+    i_min: float,
+    class_width: float,
+    v_present_min: float,
+) -> tuple[dict | None, dict]:
+    """Compute features for a continuous cycle.  Returns (features, probe_dict)."""
+    meas = cfg.get("measurement", {})
+    session_cfg = cfg.get("session", {})
+    if voltage_mode:
+        feature_sets, combined = compute_features_by_class(
+            samples, class_width,
+            r_fixture=r_fixture, length_m=length,
+            i_min=i_min,
+            i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+            i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+        )
+        class_summaries: dict[str, dict] = {}
+        for center, feat in feature_sets.items():
+            class_summaries[str(center)] = {
+                "v_target": center,
+                "n": feat["n_total"],
+                "n_busy": feat["n_busy"],
+                "v_mean": round(feat["V_min"], 3),
+                "i_mean": round(feat["mean_I"], 4),
+                "r_mean_ohm": round(feat["r_mean"], 6),
+            }
+        v_present = any(s.valid and s.voltage >= v_present_min for s in samples)
+        probe_results: dict = {
+            "steps": [], "pd_blocked": [],
+            "voltage_mode": True, "manual_voltage_mode": False,
+            "measurement_note": (
+                "Continuous mode (voltage classes): the charger's own voltage "
+                "is used directly. Readings are bucketed into real-time "
+                "voltage classes, each calculated separately, then combined."
+            ),
+            "r_fixture": r_fixture,
+            "voltage_classes": class_summaries,
+            "voltage_class_width_v": class_width,
+            "v_present": v_present,
+            "no_current_all_voltages": bool(v_present) and not feature_sets,
+        }
+        if combined is not None:
+            probe_results["quality_features"] = combined
+            probe_results["quality_reference_voltage"] = int(
+                round(float(combined["v_target"]))
+            )
+            probe_results["quality_reference_note"] = (
+                "continuous mode: all voltage classes combined for grading"
+            )
+        return combined, probe_results
+    else:
+        features = compute_features(
+            samples, v_target=v_target, r_fixture=r_fixture, length_m=length,
+            i_min=i_min,
+            i_no_load=float(session_cfg.get("i_no_load", 0.05)),
+            i_no_phone=float(session_cfg.get("i_no_phone_max", 0.01)),
+        )
+        probe_results = {
+            "steps": [], "pd_blocked": [],
+            "manual_voltage_mode": False,
+            "measurement_note": (
+                "Continuous mode: natural phone charging at fixed voltage."
+            ),
+            "r_fixture": r_fixture,
+        }
+        if features is not None:
+            probe_results["quality_features"] = features
+            probe_results["quality_reference_voltage"] = int(
+                round(float(features.get("v_target", v_target)))
+            )
+        return features, probe_results
+
+
+def _continuous_verdict(
+    cfg: dict,
+    storage: Storage,
+    features: dict | None,
+    probe_results: dict,
+    meta: SessionMeta,
+    samples: list[Sample],
+    voltage_mode: bool,
+) -> None:
+    """Save samples, compute verdict, store, and sync for one continuous cycle."""
+    sid = storage.new_session(meta)
+    verdict_meta = {
+        "session_id": sid,
+        "mode": meta.mode,
+        "v_present": meta.v_present,
+        "charging_detected": meta.charging_detected,
+        "phone_expected": meta.phone_expected,
+        "fault_reason": meta.fault_reason,
+        "probe": probe_results,
+        "manual_voltage_mode": False,
+        "voltage_mode": voltage_mode,
+        "length_m": meta.length_m,
+    }
+    verdict = rule_verdict(features, verdict_meta, cfg)
+
+    if samples:
+        storage.add_samples(sid, samples)
+        storage.export_csv(sid, samples)
+    meta.session_id = sid
+    storage.save_verdict(sid, verdict, meta)
+    storage.enqueue_remote(sid)
+    remote_result = (
+        sync_pending(storage, cfg)
+        if cfg.get("remote", {}).get("sync_on_completion", True)
+        else {"attempted": 0, "completed": 0, "failed": 0,
+               "pending": storage.remote_pending_count()}
+    )
+    if remote_result.get("attempted"):
+        print(
+            f"  remote sync: {remote_result['completed']} completed, "
+            f"{remote_result['pending']} pending"
+        )
+    cli.print_verdict(verdict)
+
+
 def main() -> int:
     args = parse_args()
     cli.force_utf8_stdout()
@@ -955,6 +1228,11 @@ def main() -> int:
             results = run_self_check(cfg, reader, ch224k)
             cli.print_self_check(results)
             return 0 if all(results.get(k) for k in ("ina219", "voltage", "pwr_ok")) else 1
+
+        # --- continuous verdict loop (method 3) ---
+        if args.continuous:
+            run_continuous(cfg, reader, ch224k, load, sim_state, storage)
+            return 0
 
         meta = SessionMeta(mode=args.mode, length_m=cfg["measurement"].get("length_m"))
         sid = storage.new_session(meta)

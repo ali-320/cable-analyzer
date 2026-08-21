@@ -102,6 +102,9 @@ debounce_end_s = 3.0
 debounce_finish_s = 10.0  # keep logging CHARGED samples before ending charge mode
 charge_timeout_s = 7200   # give up waiting for CHARGED after this
 open_timeout_s = 5.0     # NO_PHONE this long while a phone is expected -> OPEN candidate
+# Continuous verdict loop: wait for this many BUSY-state readings before
+# giving a verdict and restarting. At 25 Hz, 3000 ≈ 2 minutes.
+min_busy_readings = 3000
 
 [measurement]
 i_min_compute = 0.10      # A ; R features computed only above this
