@@ -165,6 +165,5 @@ timeout_s = 10.0
 max_retries = 2
 retry_base_s = 1.0
 sync_on_completion = true
-# The uploader loads SUPABASE_URL and SUPABASE_ANON_KEY (or
-# SUPABASE_PUBLISHABLE_KEY) from .env or the Pi environment.
-# Never store the service_role/secret key in this file.
+# The uploader loads BASE (API endpoint) and CABLE_INGEST_TOKEN
+# from .env or the Pi environment. Never commit secrets to this file.

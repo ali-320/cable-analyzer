@@ -43,8 +43,7 @@ def main() -> int:
             and not result["configured"]
         ):
             print(
-                "  Set SUPABASE_URL and SUPABASE_ANON_KEY or "
-                "SUPABASE_PUBLISHABLE_KEY in .env before retrying."
+                "  Set BASE and CABLE_INGEST_TOKEN in .env before retrying."
             )
             return 2
         return 0 if result["failed"] == 0 else 1

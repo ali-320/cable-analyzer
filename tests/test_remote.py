@@ -1,4 +1,4 @@
-"""Tests for the dependency-free Supabase outbox synchronizer."""
+"""Tests for the dependency-free ingest outbox synchronizer."""
 import json
 import os
 import tempfile
@@ -10,7 +10,7 @@ from tests.helpers import make_samples
 
 from src.telemetry.models import SessionMeta
 from src.telemetry.remote import (
-    SupabaseRestClient,
+    IngestRestClient,
     client_from_config,
     load_env_file,
     sync_pending,
@@ -56,30 +56,30 @@ class TestEnvLoading(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
             env_path.write_text(
-                "# comment\nexport SUPABASE_URL='https://from-file'\n"
-                "SUPABASE_PUBLISHABLE_KEY=file-key\nDEVICE_ID=pi-from-file\n",
+                "# comment\nexport BASE='https://from-file'\n"
+                "CABLE_INGEST_TOKEN=file-token\nCABLE_INGEST_DEVICE_ID=pi-from-file\n",
                 encoding="utf-8",
             )
-            with patch.dict(os.environ, {"SUPABASE_URL": "https://from-shell"}, clear=False):
-                for name in ("SUPABASE_PUBLISHABLE_KEY", "DEVICE_ID"):
+            with patch.dict(os.environ, {"BASE": "https://from-shell"}, clear=False):
+                for name in ("CABLE_INGEST_TOKEN", "CABLE_INGEST_DEVICE_ID"):
                     os.environ.pop(name, None)
                 load_env_file(env_path)
-                self.assertEqual(os.environ["SUPABASE_URL"], "https://from-shell")
-                self.assertEqual(os.environ["SUPABASE_PUBLISHABLE_KEY"], "file-key")
-                self.assertEqual(os.environ["DEVICE_ID"], "pi-from-file")
+                self.assertEqual(os.environ["BASE"], "https://from-shell")
+                self.assertEqual(os.environ["CABLE_INGEST_TOKEN"], "file-token")
+                self.assertEqual(os.environ["CABLE_INGEST_DEVICE_ID"], "pi-from-file")
 
     def test_client_from_config_loads_dotenv(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / ".env"
             env_path.write_text(
-                "SUPABASE_URL=https://from-file\nSUPABASE_PUBLISHABLE_KEY=file-key\n",
+                "BASE=https://from-file\nCABLE_INGEST_TOKEN=file-token\n",
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {}, clear=True), patch("src.telemetry.remote.Path", return_value=env_path):
                 client = client_from_config({"remote": {"enabled": True}})
             self.assertIsNotNone(client)
             self.assertEqual(client.base_url, "https://from-file")
-            self.assertEqual(client.api_key, "file-key")
+            self.assertEqual(client.token, "file-token")
 
 
 class TestRemoteSync(unittest.TestCase):
@@ -160,9 +160,9 @@ class TestRemoteSync(unittest.TestCase):
             requests.append((request, timeout))
             return FakeResponse()
 
-        client = SupabaseRestClient(
-            "https://example.supabase.co",
-            "public-test-key",
+        client = IngestRestClient(
+            "https://battery-ai.replit.app/api",
+            "test-ingest-token",
             opener=opener,
             retry_base_s=0.0,
         )
@@ -180,11 +180,9 @@ class TestRemoteSync(unittest.TestCase):
 
         request, timeout = requests[0]
         self.assertEqual(timeout, 10.0)
-        self.assertIn("/rest/v1/samples", request.full_url)
-        self.assertIn("on_conflict=session_id%2Csample_index", request.full_url)
-        self.assertEqual(request.get_header("Apikey"), "public-test-key")
-        self.assertEqual(request.get_header("Authorization"), "Bearer public-test-key")
-        self.assertEqual(request.get_header("Prefer"), "return=minimal")
+        self.assertIn("/ingest/v1/cable/samples", request.full_url)
+        self.assertNotIn("on_conflict", request.full_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-ingest-token")
         self.assertEqual(json.loads(request.data.decode("utf-8"))[0]["sample_index"], 0)
 
 

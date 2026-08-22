@@ -1,8 +1,8 @@
-"""Supabase REST synchronization for completed local telemetry sessions.
+"""REST synchronization for completed local telemetry sessions.
 
 The acquisition loop never calls this module. Local SQLite/CSV storage remains
 authoritative; this module uploads completed sessions from the local outbox in
-bounded, retry-safe batches.
+bounded, retry-safe batches to the Battery.ai ingest API.
 """
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import json
 import os
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -48,13 +47,13 @@ def load_env_file(path: str | Path = ".env") -> None:
             os.environ.setdefault(name, value)
 
 
-class SupabaseRestClient:
-    """Small standard-library-only client for Supabase's PostgREST endpoint."""
+class IngestRestClient:
+    """Standard-library-only client for the Battery.ai ingest API."""
 
     def __init__(
         self,
         base_url: str,
-        api_key: str,
+        token: str,
         *,
         timeout_s: float = 10.0,
         max_retries: int = 2,
@@ -63,35 +62,28 @@ class SupabaseRestClient:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+        self.token = token
         self.timeout_s = float(timeout_s)
         self.max_retries = max(0, int(max_retries))
         self.retry_base_s = max(0.0, float(retry_base_s))
         self.opener = opener
         self.sleep = sleep
-        if not self.base_url or not self.api_key:
-            raise ValueError("Supabase URL and publishable/anon key are required")
+        if not self.base_url or not self.token:
+            raise ValueError("BASE URL and CABLE_INGEST_TOKEN are required")
 
     def _post(
         self,
-        table: str,
+        endpoint: str,
         rows: list[dict[str, Any]],
-        *,
-        conflict_columns: str,
     ) -> None:
-        endpoint = f"{self.base_url}/rest/v1/{table}"
-        query = urllib.parse.urlencode({"on_conflict": conflict_columns})
+        url = f"{self.base_url}/ingest/v1/cable/{endpoint}"
         request = urllib.request.Request(
-            f"{endpoint}?{query}",
+            url,
             data=json.dumps(rows, separators=(",", ":")).encode("utf-8"),
             method="POST",
             headers={
-                "apikey": self.api_key,
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
-                # Return no row body so insert-only RLS policies do not need
-                # response-read privileges.
-                "Prefer": "return=minimal",
             },
         )
 
@@ -102,27 +94,27 @@ class SupabaseRestClient:
                     response.read()
                 if 200 <= status < 300:
                     return
-                error = f"Supabase {table} returned HTTP {status}"
+                error = f"Ingest API {endpoint} returned HTTP {status}"
                 if status not in (408, 425, 429) and not 500 <= status <= 599:
                     raise RemoteSyncError(error)
             except urllib.error.HTTPError as exc:
                 details = exc.read().decode("utf-8", errors="replace")
-                error = f"Supabase {table} returned HTTP {exc.code}: {details[:500]}"
+                error = f"Ingest API {endpoint} returned HTTP {exc.code}: {details[:500]}"
                 if exc.code not in (408, 425, 429) and not 500 <= exc.code <= 599:
                     raise RemoteSyncError(error) from exc
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                error = f"Supabase {table} request failed: {exc}"
+                error = f"Ingest API {endpoint} request failed: {exc}"
 
             if attempt >= self.max_retries:
                 raise RemoteSyncError(error)
             self.sleep(self.retry_base_s * (2**attempt))
 
     def insert_session(self, row: dict[str, Any]) -> None:
-        self._post("sessions", [row], conflict_columns="session_id")
+        self._post("sessions", [row])
 
     def insert_samples(self, rows: list[dict[str, Any]]) -> None:
         if rows:
-            self._post("samples", rows, conflict_columns="session_id,sample_index")
+            self._post("samples", rows)
 
 
 def _json_or_none(value: Any) -> Any:
@@ -134,7 +126,7 @@ def _json_or_none(value: Any) -> Any:
 
 
 def session_payload(row: Any, device_id: str) -> dict[str, Any]:
-    """Map one local SQLite session row to the Supabase schema."""
+    """Map one local SQLite session row to the ingest API schema."""
     return {
         "session_id": row["session_id"],
         "device_id": device_id,
@@ -153,29 +145,26 @@ def session_payload(row: Any, device_id: str) -> dict[str, Any]:
     }
 
 
-def client_from_config(cfg: dict) -> SupabaseRestClient | None:
+def client_from_config(cfg: dict) -> IngestRestClient | None:
     """Build a client from environment variables, or return None if unconfigured."""
     remote = cfg.get("remote", {})
     if not bool(remote.get("enabled", False)):
         return None
     load_env_file()
-    url = os.environ.get("SUPABASE_URL", "").strip()
-    key = (
-        os.environ.get("SUPABASE_ANON_KEY", "").strip()
-        or os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
-    )
-    if not url or not key:
+    url = os.environ.get("BASE", "").strip()
+    token = os.environ.get("CABLE_INGEST_TOKEN", "").strip()
+    if not url or not token:
         return None
-    return SupabaseRestClient(
+    return IngestRestClient(
         url,
-        key,
+        token,
         timeout_s=float(remote.get("timeout_s", 10.0)),
         max_retries=int(remote.get("max_retries", 2)),
         retry_base_s=float(remote.get("retry_base_s", 1.0)),
     )
 
 
-def sync_pending(storage, cfg: dict, client: SupabaseRestClient | None = None) -> dict[str, int]:
+def sync_pending(storage, cfg: dict, client: IngestRestClient | None = None) -> dict[str, int]:
     """Upload pending completed sessions and return a compact sync summary."""
     remote = cfg.get("remote", {})
     result = {
@@ -196,7 +185,7 @@ def sync_pending(storage, cfg: dict, client: SupabaseRestClient | None = None) -
         return result
 
     result["configured"] = 1
-    device_id = os.environ.get("DEVICE_ID", remote.get("device_id", "pi-zero-2w-01"))
+    device_id = os.environ.get("CABLE_INGEST_DEVICE_ID", remote.get("device_id", "pi-zero-2w-01"))
     batch_size = max(1, int(remote.get("batch_size", 500)))
     for queued in storage.pending_remote_sessions():
         session_id = queued["session_id"]

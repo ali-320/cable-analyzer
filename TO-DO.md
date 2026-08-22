@@ -50,11 +50,11 @@
 # Hardware goals
 [[04-hardware-architecture#4.2 Hardware Goals]]
 - [x] Single monitored port
-- [ ] Appliance operation
-- [ ] Reliability
+- [x] Appliance operation
+- [x] Reliability
 - [x] Accuracy
 - [ ] Safety
-- [ ] Expandability
+- [x] Expandability
 
 > [!NOTE] NOTE
 > All of the above are done using the following components:
@@ -62,7 +62,7 @@
 > - The results are currently accurate and the mathematical results are suitable for model training.
 # Telemetry objectives
 [[05-telemetry-engine#5.2 Objectives]]
-- [ ] Continuous acquisition
+- [x] Continuous acquisition
 - [x] High Fidelity
 - [x] Deterministic Timing
 - [ ] Fault tolerance
@@ -114,9 +114,9 @@
 
 # Telemetry Error Handling
 [[05-telemetry-engine#5.10 Error Handling]]
-- [ ] Sensor timeout
+- [x] Sensor timeout
 - [x] Invalid measurement
-- [ ] storage unavailable
+- [x] storage unavailable
 - [x] cloud unavailable
 - [x] clock drift
 
@@ -206,7 +206,7 @@
 # Security principles
 [[09-security-privacy#9.2 Security Principles]]
 - [ ] Secure by default
-- [ ] Least privilege
+- [x] Least privilege
 - [ ] Defense in depth
 - [x] Privacy first
 - [ ] Verify everything
@@ -242,10 +242,10 @@
 # Deployment principles
 [[10-deployment-operations#10.2 Operational Principles]]
 - [ ] Zero touch
-- [ ] Appliance first
-- [ ] Local first
-- [ ] Self Monitoring
-- [ ] Recoverable
+- [x] Appliance first
+- [x] Local first
+- [x] Self Monitoring
+- [x] Recoverable
 
 # Factory provisioning
 [[10-deployment-operations#10.5 Factory Provisioning]]
@@ -256,26 +256,26 @@
 
 # Operational Health
 [[10-deployment-operations#10.7 Operational Health]]
-- [ ] Telemetry status
+- [x] Telemetry status
 - [ ] Storage status
-- [ ] Wifi Status
+- [x] Wifi Status
 - [ ] AI status
 - [ ] Update status
 
 # Failure Loss
 [[10-deployment-operations#10.9 Failure Recovery]]
 - [ ] Power Loss
-- [ ] Cloud Loss
+- [x] Cloud Loss
 - [ ] Failed Update
-- [ ] Sensor Failure
+- [x] Sensor Failure
 - [ ] Storage Warning
 
 # Test levels
 [[11-verification-validation#11.4 Test Levels]]
 - [x] Unit
 - [x] Integration
-- [ ] System
-- [ ] Regression
+- [x] System
+- [x] Regression
 - [ ] Acceptance
 
 > [!NOTE] NOTE
@@ -293,7 +293,7 @@
 > Telemetry results are verified and the charging behavior is completely transparent.
 # AI validation
 [[11-verification-validation#11.8 AI Validation]]
-- [ ] Confidence Distribution
+- [x] Confidence Distribution
 - [x] Repeatability
 - [ ] Drift Detection
 - [x] Explainability
