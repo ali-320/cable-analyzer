@@ -5,12 +5,16 @@ WiFi Provisioning Web Server for Raspberry Pi
 Serves a form (over the Pi's own hotspot) that collects WiFi credentials,
 then switches the Pi from hotspot (AP) mode to client mode using them.
 
-Assumes the hotspot was created with NetworkManager (nmcli), which is the
-default network stack on Raspberry Pi OS Bookworm and later. If you set
-your hotspot up the classic way with hostapd + dnsmasq instead, the
-switch_to_client() function needs to be rewritten (see notes at the bottom).
+Flow:
+  1. User submits SSID + password
+  2. Kill wfrespawn and wf-panel-pi to prevent auth popups
+  3. Hotspot goes down, Pi tries to connect
+  4. Hotspot comes back up, user reconnects and checks /status
+  5. If success → user clicks OK → hotspot goes down, Pi connects to WiFi
+  6. If failure → user sees error, can retry
 
-Requires: pip install flask   (or: sudo apt install python3-flask)
+Assumes the hotspot was created with NetworkManager (nmcli).
+Requires: pip install flask
 """
 
 import subprocess
@@ -25,9 +29,14 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("wifi-provision")
 
 # --- CONFIGURE THESE FOR YOUR SETUP ---
-HOTSPOT_CONNECTION_NAME = "Hotspot"   # check yours with: nmcli connection show
+HOTSPOT_CONNECTION_NAME = "hotspot"   # check yours with: nmcli connection show
 WIFI_INTERFACE = "wlan0"
 SWITCH_DELAY_SECONDS = 2              # lets the HTTP response reach the phone first
+
+# --- SHARED STATE ---
+connection_status = None   # None = idle, True = success, False = failure
+pending_ssid = None        # SSID to connect to after user confirms
+pending_password = None    # password to connect to after user confirms
 
 
 def run(cmd):
@@ -35,9 +44,19 @@ def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def switch_to_client(ssid: str, password: str):
-    """Runs in a background thread so the HTTP response can be sent first."""
+def kill_panel_processes():
+    """Kill wfrespawn and wf-panel-pi to prevent auth popups."""
+    log.info("Killing wfrespawn and wf-panel-pi")
+    run(["pkill", "-f", "wfrespawn"])
+    run(["pkill", "-f", "wf-panel-pi"])
+
+
+def try_connect(ssid: str, password: str):
+    """Runs in a background thread. Tries to connect, then brings hotspot back."""
+    global connection_status
+
     time.sleep(SWITCH_DELAY_SECONDS)
+    kill_panel_processes()
 
     log.info("Bringing down hotspot '%s'", HOTSPOT_CONNECTION_NAME)
     run(["nmcli", "connection", "down", HOTSPOT_CONNECTION_NAME])
@@ -50,16 +69,40 @@ def switch_to_client(ssid: str, password: str):
         ])
     else:
         result = run([
-            "nmcli", "device", "wifi", "connect", ssid, "ifname", WIFI_INTERFACE
+            "nmcli", "device", "wifi", "connect", ssid,
+            "ifname", WIFI_INTERFACE
         ])
 
     if result.returncode == 0:
         log.info("Connected successfully to %s", ssid)
-        return
+        connection_status = True
+    else:
+        log.warning("Failed to connect to %s: %s", ssid, result.stderr.strip())
+        connection_status = False
 
-    log.warning("Failed to connect to %s: %s", ssid, result.stderr.strip())
-    log.info("Reverting to hotspot mode so the user can retry")
+        log.info("Deleting failed connection profile for '%s'", ssid)
+        run(["nmcli", "connection", "delete", ssid])
+
+    # Bring hotspot back so the user can check the result
+    log.info("Bringing hotspot back up")
     run(["nmcli", "connection", "up", HOTSPOT_CONNECTION_NAME])
+
+
+def connect_to_wifi(ssid: str, password: str):
+    """Runs in a background thread. Connects to the confirmed WiFi and shuts down hotspot."""
+    time.sleep(SWITCH_DELAY_SECONDS)
+    kill_panel_processes()
+
+    log.info("Bringing down hotspot '%s'", HOTSPOT_CONNECTION_NAME)
+    run(["nmcli", "connection", "down", HOTSPOT_CONNECTION_NAME])
+
+    log.info("Connecting to confirmed WiFi '%s'", ssid)
+    result = run(["nmcli", "con", "up", ssid])
+
+    if result.returncode == 0:
+        log.info("Connected successfully to %s", ssid)
+    else:
+        log.warning("Failed to connect to %s: %s", ssid, result.stderr.strip())
 
 
 @app.route("/")
@@ -69,6 +112,9 @@ def index():
 
 @app.route("/connect", methods=["POST"])
 def connect():
+    """User submits credentials. We try them, then bring hotspot back."""
+    global connection_status, pending_ssid, pending_password
+
     ssid = request.form.get("ssid", "").strip()
     password = request.form.get("password", "")
 
@@ -80,32 +126,56 @@ def connect():
             "error": "Password must be 8-63 characters, or left blank for an open network."
         }), 400
 
-    threading.Thread(target=switch_to_client, args=(ssid, password), daemon=True).start()
+    # Reset state and store pending credentials
+    connection_status = None
+    pending_ssid = ssid
+    pending_password = password
+
+    threading.Thread(target=try_connect, args=(ssid, password), daemon=True).start()
 
     return jsonify({
         "ok": True,
         "message": (
-            "Got it. The Pi will switch to that network in a couple of seconds "
-            "and the hotspot will disappear. Reconnect your phone to your normal "
-            "WiFi, then check that the Pi has joined the network."
+            "Credentials received. The Pi will try to connect and then bring "
+            "the hotspot back. Reconnect your phone to the PiHotspot and "
+            "check the result in a few seconds."
         )
     })
 
 
+@app.route("/status", methods=["GET"])
+def status():
+    """Frontend polls this after reconnecting to the hotspot."""
+    global connection_status
+
+    if connection_status is None:
+        return jsonify({"ok": True, "status": "pending"})
+    elif connection_status is True:
+        return jsonify({"ok": True, "status": "success", "ssid": pending_ssid})
+    else:
+        return jsonify({"ok": True, "status": "error"})
+
+
+@app.route("/confirm", methods=["POST"])
+def confirm():
+    """User confirmed. Bring down hotspot and connect to WiFi permanently."""
+    global connection_status
+
+    ssid = pending_ssid
+    password = pending_password
+
+    if not ssid:
+        return jsonify({"ok": False, "error": "No pending connection to confirm."}), 400
+
+    connection_status = None
+
+    threading.Thread(target=connect_to_wifi, args=(ssid, password), daemon=True).start()
+
+    return jsonify({
+        "ok": True,
+        "message": "Connecting to WiFi. The hotspot will go down shortly."
+    })
+
+
 if __name__ == "__main__":
-    # host="0.0.0.0" so it's reachable at the Pi's hotspot IP, not just localhost.
     app.run(host="0.0.0.0", port=5000)
-
-
-# -----------------------------------------------------------------------
-# If your hotspot was built with hostapd + dnsmasq instead of NetworkManager,
-# switch_to_client() needs to instead:
-#   1. sudo systemctl stop hostapd dnsmasq
-#   2. Write a network={ ssid=... psk=... } block into
-#      /etc/wpa_supplicant/wpa_supplicant.conf
-#   3. sudo wpa_cli -i wlan0 reconfigure   (or restart dhcpcd/wpa_supplicant)
-#   4. On failure, restore the AP-mode config for wlan0 and restart
-#      hostapd + dnsmasq.
-# This is more fragile because you're juggling the same interface between
-# two different services - nmcli's approach is a lot less error-prone.
-# -----------------------------------------------------------------------

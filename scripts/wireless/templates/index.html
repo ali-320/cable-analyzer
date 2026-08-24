@@ -10,45 +10,187 @@
   h1 { font-size:1.25rem; margin-bottom:1.5rem; text-align:center; }
   label { display:block; font-size:0.9rem; margin-bottom:0.3rem; color:#333; }
   input { width:100%; padding:0.7rem; margin-bottom:1rem; border:1px solid #ccc; border-radius:8px; box-sizing:border-box; font-size:1rem; }
-  button { width:100%; padding:0.8rem; border:none; border-radius:8px; background:#0d6efd; color:#fff; font-size:1rem; }
-  button:disabled { background:#93b8f0; }
+  button { width:100%; padding:0.8rem; border:none; border-radius:8px; background:#0d6efd; color:#fff; font-size:1rem; cursor:pointer; }
+  button:disabled { background:#93b8f0; cursor:not-allowed; }
+  .btn-ok { background:#198754; }
+  .btn-ok:disabled { background:#7ab88f; }
+  .btn-retry { background:#dc3545; }
+  .btn-retry:disabled { background:#e8909a; }
   #status { margin-top:1rem; font-size:0.9rem; text-align:center; }
   .error { color:#c00; }
   .success { color:#0a0; }
+  .hidden { display:none; }
+  .spinner { display:inline-block; width:18px; height:18px; border:3px solid #ccc; border-top-color:#0d6efd; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:0.5rem; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
   <div class="card">
     <h1>Connect Raspberry Pi to WiFi</h1>
-    <form id="wifi-form">
-      <label for="ssid">Network name (SSID)</label>
-      <input type="text" id="ssid" name="ssid" required autocomplete="off">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" autocomplete="off">
-      <button type="submit" id="submit-btn">Connect</button>
-    </form>
-    <div id="status"></div>
+
+    <!-- STATE: FORM -->
+    <div id="state-form">
+      <form id="wifi-form">
+        <label for="ssid">Network name (SSID)</label>
+        <input type="text" id="ssid" name="ssid" required autocomplete="off">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="off">
+        <button type="submit" id="submit-btn">Connect</button>
+      </form>
+      <div id="form-status"></div>
+    </div>
+
+    <!-- STATE: WAITING -->
+    <div id="state-waiting" class="hidden">
+      <p style="text-align:center"><span class="spinner"></span> Reconnecting to PiHotspot...</p>
+      <p id="waiting-msg" style="text-align:center; font-size:0.9rem; color:#555;"></p>
+      <div id="waiting-status"></div>
+    </div>
+
+    <!-- STATE: SUCCESS -->
+    <div id="state-success" class="hidden">
+      <p class="success" style="text-align:center; font-size:1.1rem; font-weight:bold;">&#10003; Connected successfully!</p>
+      <p id="success-ssid" style="text-align:center; font-size:0.9rem; color:#555;"></p>
+      <button id="ok-btn" class="btn-ok" style="margin-top:1rem;">OK</button>
+      <div id="ok-status"></div>
+    </div>
+
+    <!-- STATE: ERROR -->
+    <div id="state-error" class="hidden">
+      <p class="error" style="text-align:center; font-size:1.1rem; font-weight:bold;">&#10007; Connection failed</p>
+      <p style="text-align:center; font-size:0.9rem; color:#555;">The credentials were incorrect. Please try again.</p>
+      <form id="retry-form">
+        <label for="retry-ssid">Network name (SSID)</label>
+        <input type="text" id="retry-ssid" name="ssid" required autocomplete="off">
+        <label for="retry-password">Password</label>
+        <input type="password" id="retry-password" name="password" autocomplete="off">
+        <button type="submit" class="btn-retry" id="retry-btn">Try Again</button>
+      </form>
+      <div id="retry-status"></div>
+    </div>
+
   </div>
 
 <script>
+const POLL_INTERVAL = 2000;   // ms between /status checks
+const POLL_TIMEOUT  = 30000;  // give up after 30s
+
+function show(state) {
+  ["form", "waiting", "success", "error"].forEach(s => {
+    document.getElementById("state-" + s).classList.toggle("hidden", s !== state);
+  });
+}
+
+function setStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = type || "";
+}
+
+// --- FORM SUBMIT ---
 document.getElementById("wifi-form").addEventListener("submit", async function (e) {
   e.preventDefault();
-  const status = document.getElementById("status");
   const btn = document.getElementById("submit-btn");
+  const statusEl = document.getElementById("form-status");
   btn.disabled = true;
-  status.textContent = "Sending...";
-  status.className = "";
+  setStatus("form-status", "Sending...", "");
 
   const formData = new FormData(this);
   try {
     const res = await fetch("/connect", { method: "POST", body: formData });
     const data = await res.json();
-    status.textContent = data.message || data.error;
-    status.className = data.ok ? "success" : "error";
-    if (!data.ok) btn.disabled = false;
+    if (!data.ok) {
+      setStatus("form-status", data.error, "error");
+      btn.disabled = false;
+      return;
+    }
+    // Move to waiting state and start polling
+    show("waiting");
+    document.getElementById("waiting-msg").textContent = data.message;
+    startPolling(formData.get("ssid"));
   } catch (err) {
-    status.textContent = "Could not reach the Pi - it may have already switched networks.";
-    status.className = "success";
+    setStatus("form-status", "Could not reach the Pi.", "error");
+    btn.disabled = false;
+  }
+});
+
+// --- POLL /status ---
+function startPolling(ssid) {
+  const start = Date.now();
+  const poll = async () => {
+    try {
+      const res = await fetch("/status");
+      const data = await res.json();
+      if (data.status === "success") {
+        document.getElementById("success-ssid").textContent = "Network: " + data.ssid;
+        show("success");
+        return;
+      }
+      if (data.status === "error") {
+        show("error");
+        document.getElementById("retry-ssid").value = ssid;
+        return;
+      }
+      // Still pending — keep polling
+      if (Date.now() - start < POLL_TIMEOUT) {
+        setTimeout(poll, POLL_INTERVAL);
+      } else {
+        setStatus("waiting-status", "Timed out waiting for result. Please reconnect to PiHotspot and reload.", "error");
+      }
+    } catch (err) {
+      if (Date.now() - start < POLL_TIMEOUT) {
+        setTimeout(poll, POLL_INTERVAL);
+      } else {
+        setStatus("waiting-status", "Could not reach the Pi. Please reconnect to PiHotspot and reload.", "error");
+      }
+    }
+  };
+  setTimeout(poll, POLL_INTERVAL);
+}
+
+// --- OK BUTTON (confirm & connect) ---
+document.getElementById("ok-btn").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true;
+  setStatus("ok-status", "Connecting...", "");
+
+  try {
+    const res = await fetch("/confirm", { method: "POST" });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus("ok-status", data.message, "success");
+    } else {
+      setStatus("ok-status", data.error, "error");
+      btn.disabled = false;
+    }
+  } catch (err) {
+    setStatus("ok-status", "Could not reach the Pi.", "error");
+    btn.disabled = false;
+  }
+});
+
+// --- RETRY FORM ---
+document.getElementById("retry-form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const btn = document.getElementById("retry-btn");
+  btn.disabled = true;
+  setStatus("retry-status", "Sending...", "");
+
+  const formData = new FormData(this);
+  try {
+    const res = await fetch("/connect", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!data.ok) {
+      setStatus("retry-status", data.error, "error");
+      btn.disabled = false;
+      return;
+    }
+    show("waiting");
+    document.getElementById("waiting-msg").textContent = data.message;
+    startPolling(formData.get("ssid"));
+  } catch (err) {
+    setStatus("retry-status", "Could not reach the Pi.", "error");
+    btn.disabled = false;
   }
 });
 </script>
