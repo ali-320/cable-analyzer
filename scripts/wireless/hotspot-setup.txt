@@ -1,0 +1,41 @@
+# ============================================
+# Raspberry Pi Zero 2W — WiFi Hotspot Setup
+# ============================================
+# Run these commands ON the Pi Zero 2W.
+# One-time setup, then just activate on each boot.
+
+# --- One-time: Install dependencies ---
+sudo apt update
+sudo apt install -y dnsmasq
+
+# --- One-time: Create hotspot profile ---
+sudo nmcli con add con-name hotspot ifname wlan0 type wifi ssid PiHotspot
+sudo nmcli con mod hotspot ipv4.addresses 192.168.4.1/24
+sudo nmcli con mod hotspot ipv4.method shared
+sudo nmcli con mod hotspot wifi-sec.key-mgmt wpa-psk
+sudo nmcli con mod hotspot wifi-sec.psk "raspberry"
+sudo nmcli con mod hotspot 802-11-wireless.mode ap
+sudo nmcli con mod hotspot 802-11-wireless.band bg
+sudo nmcli con mod hotspot 802-11-wireless.channel 7
+
+# --- One-time: Configure dnsmasq (DHCP server) ---
+sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+sudo tee /etc/dnsmasq.conf << 'EOF'
+interface=wlan0
+dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+EOF
+
+sudo systemctl unmask hostapd
+sudo systemctl enable dnsmasq
+sudo systemctl restart dnsmasq
+
+# --- Every boot: Activate hotspot ---
+sudo nmcli con up hotspot
+
+# --- Run your Flask app ---
+cd /path/to/your/app
+python3 app.py --host=0.0.0.0 --port=8080
+
+# --- Connect from mobile ---
+# 1. WiFi settings → connect to "PiHotspot" (password: raspberry)
+# 2. Open browser → http://192.168.4.1:8080
