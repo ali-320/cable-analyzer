@@ -8,9 +8,7 @@ User=root
 Group=root
 WorkingDirectory=/home/pi/project-ali/scripts/wireless
 Environment=TMPDIR=/tmp
-ExecStartPre=-/usr/bin/tmux kill-session -t wifi-prov
 ExecStart=/bin/bash /home/pi/project-ali/scripts/wireless/hotspot-start.sh
-ExecStop=/usr/bin/tmux kill-session -t wifi-prov
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30

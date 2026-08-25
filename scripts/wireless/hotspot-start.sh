@@ -2,6 +2,13 @@
 # hotspot-start.sh — bring up the WiFi hotspot and run the provisioning web app.
 #
 # Called by wifi-provision.service on boot.
+#
+# Logic:
+#   1. Wait for wlan0, kill interfering processes
+#   2. List saved WiFi connections (excluding hotspot)
+#   3. Try each saved connection until one works
+#   4. If connected → LED on, exit
+#   5. If none work → start hotspot + provisioning app
 set -euo pipefail
 
 HOTSPOT_NAME="hotspot"
@@ -11,10 +18,88 @@ WIFI_IF="wlan0"
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$APP_DIR/../.." && pwd)"
 VENV_PYTHON="$PROJECT_DIR/.venv/bin/python3"
+HOTSPOT_IP="192.168.4.1"
 
-echo "=== WiFi Provision: checking hotspot profile ==="
+# BCM GPIO 21 = physical pin 40 (blue LED)
+LED_PIN=21
 
-# Create the hotspot profile if it doesn't exist
+led_blue_on() {
+    $VENV_PYTHON -c "import RPi.GPIO as GPIO; GPIO.setmode(GPIO.BCM); GPIO.setup($LED_PIN, GPIO.OUT); GPIO.output($LED_PIN, GPIO.HIGH)" 2>/dev/null || true
+}
+
+led_off() {
+    $VENV_PYTHON -c "import RPi.GPIO as GPIO; GPIO.setmode(GPIO.BCM); GPIO.setup($LED_PIN, GPIO.OUT); GPIO.output($LED_PIN, GPIO.LOW)" 2>/dev/null || true
+}
+
+kill_panel_processes() {
+    pkill -f wfrespawn 2>/dev/null || true
+    pkill -f wf-panel-pi 2>/dev/null || true
+}
+
+# --- Wait for wlan0 ---
+echo "Waiting for $WIFI_IF to be ready ..."
+for i in $(seq 1 15); do
+    if nmcli device status 2>/dev/null | grep -q "$WIFI_IF"; then
+        echo "$WIFI_IF is ready."
+        break
+    fi
+    sleep 1
+done
+
+# --- Kill processes that might interfere with nmcli ---
+kill_panel_processes
+sleep 1
+
+# --- Get saved WiFi connection names (exclude hotspot) ---
+echo "Listing saved WiFi connections ..."
+SAVED_CONNS=$(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+    | grep ":802-11-wireless$" \
+    | cut -d: -f1 \
+    | grep -v "^${HOTSPOT_NAME}$" || true)
+
+CONNECTED=false
+
+if [ -n "$SAVED_CONNS" ]; then
+    echo "Saved WiFi connections (excluding hotspot):"
+    echo "$SAVED_CONNS"
+
+    while IFS= read -r CONN_NAME; do
+        [ -z "$CONN_NAME" ] && continue
+        echo "Trying to connect to saved connection '$CONN_NAME' ..."
+
+        kill_panel_processes
+
+        if nmcli con up "$CONN_NAME" 2>/dev/null; then
+            sleep 2
+            CURRENT_IP=$(hostname -I | awk '{print $1}')
+            echo "Connected to '$CONN_NAME'. IP: ${CURRENT_IP:-none}"
+
+            if [ -n "$CURRENT_IP" ] && [ "$CURRENT_IP" != "$HOTSPOT_IP" ]; then
+                echo "Success! Connected to real WiFi."
+                CONNECTED=true
+                break
+            else
+                echo "Got hotspot IP, treating as failure. Disconnecting ..."
+                nmcli con down "$CONN_NAME" 2>/dev/null || true
+            fi
+        else
+            echo "Failed to connect to '$CONN_NAME'."
+        fi
+    done <<< "$SAVED_CONNS"
+fi
+
+# --- Check result ---
+if [ "$CONNECTED" = true ]; then
+    echo "WiFi connected. Turning LED on."
+    led_blue_on
+    exit 0
+fi
+
+# --- No known WiFi — start the hotspot ---
+echo "No saved WiFi network available. Starting hotspot provisioning ..."
+led_off
+
+# Ensure hotspot profile exists
 if ! nmcli -t -f NAME connection show | grep -qx "$HOTSPOT_NAME"; then
     echo "Creating hotspot profile '$HOTSPOT_NAME' ..."
     nmcli connection add \
@@ -34,29 +119,7 @@ else
     echo "Hotspot profile '$HOTSPOT_NAME' already exists."
 fi
 
-# Ensure dnsmasq is configured for DHCP on the hotspot
-if [ ! -f /etc/dnsmasq.conf.orig ]; then
-    echo "Configuring dnsmasq ..."
-    sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig 2>/dev/null || true
-    sudo tee /etc/dnsmasq.conf > /dev/null << 'DNSEOF'
-interface=wlan0
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-DNSEOF
-    sudo systemctl enable dnsmasq 2>/dev/null || true
-    sudo systemctl restart dnsmasq 2>/dev/null || true
-fi
-
-# Wait for wlan0 to be ready
-echo "Waiting for $WIFI_IF to be ready ..."
-for i in $(seq 1 10); do
-    if nmcli device status | grep -q "$WIFI_IF"; then
-        echo "$WIFI_IF is ready."
-        break
-    fi
-    sleep 1
-done
-
-# Bring up the hotspot, cycle it to ensure SSID broadcasts correctly
+# Bring up hotspot, cycle to fix SSID broadcast
 echo "Bringing up hotspot '$HOTSPOT_NAME' (first time) ..."
 nmcli connection up "$HOTSPOT_NAME"
 sleep 5
