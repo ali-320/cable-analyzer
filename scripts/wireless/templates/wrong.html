@@ -3,25 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connect to WiFi</title>
+<title>Connection Failed</title>
 <style>
   body { font-family: -apple-system, sans-serif; background:#f4f4f4; margin:0; padding:2rem 1rem; }
   .card { max-width:400px; margin:0 auto; background:#fff; border-radius:12px; padding:2rem; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
   h1 { font-size:1.25rem; margin-bottom:1.5rem; text-align:center; }
+  .error { color:#c00; text-align:center; font-size:1.1rem; font-weight:bold; }
+  .info { text-align:center; font-size:0.9rem; color:#555; }
   label { display:block; font-size:0.9rem; margin-bottom:0.3rem; color:#333; }
   input { width:100%; padding:0.7rem; margin-bottom:1rem; border:1px solid #ccc; border-radius:8px; box-sizing:border-box; font-size:1rem; }
-  button { width:100%; padding:0.8rem; border:none; border-radius:8px; background:#0d6efd; color:#fff; font-size:1rem; cursor:pointer; }
+  button { width:100%; padding:0.8rem; border:none; border-radius:8px; background:#dc3545; color:#fff; font-size:1rem; cursor:pointer; margin-top:0.5rem; }
 </style>
 </head>
 <body>
   <div class="card">
     <h1>Connect Raspberry Pi to WiFi</h1>
+    <p class="error">&#10007; Connection failed</p>
+    <p class="info">The credentials were incorrect. Please try again.</p>
     <form action="/connect" method="POST">
       <label for="ssid">Network name (SSID)</label>
-      <input type="text" id="ssid" name="ssid" required autocomplete="off">
+      <input type="text" id="ssid" name="ssid" value="{{ ssid }}" required autocomplete="off">
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="off">
-      <button type="submit">Connect</button>
+      <button type="submit">Try Again</button>
     </form>
   </div>
 </body>
