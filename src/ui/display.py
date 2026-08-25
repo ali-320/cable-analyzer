@@ -19,6 +19,7 @@ Pin mapping (from the user's wiring table):
 from __future__ import annotations
 
 import struct
+import subprocess
 import threading
 import time
 
@@ -219,11 +220,27 @@ class ST7735S:
 
     # ── background thread ────────────────────────────────────────
 
+    @staticmethod
+    def _get_wifi_ssid() -> str:
+        """Return the current WiFi SSID, or '---' if not connected."""
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi", "list"],
+                capture_output=True, text=True, timeout=3,
+            )
+            for line in result.stdout.strip().splitlines():
+                if line.startswith("yes:"):
+                    return line.split(":", 1)[1]
+        except Exception:
+            pass
+        return "---"
+
     def _draw_screen(self, t: float, voltage: float, current: float, power: float) -> None:
         """Render one frame to the Pillow image and push to SPI."""
+        ssid = self._get_wifi_ssid()
         d = self._draw
         d.rectangle([0, 0, self._eff_w - 1, self._eff_h - 1], fill=(0, 0, 0))
-        d.text((4, 4),  "RADWI LIVE", fill=(0, 200, 255), font=self._font)
+        d.text((4, 4),  ssid, fill=(0, 200, 255), font=self._font)
         d.line([(4, 28), (self._eff_w - 5, 28)], fill=(100, 100, 100), width=1)
         y = 38
         d.text((4, y),      f" V   {voltage:6.3f} V", fill=(255, 255, 255), font=self._font)
