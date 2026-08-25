@@ -22,6 +22,15 @@ import threading
 import time
 import logging
 
+try:
+    import RPi.GPIO as GPIO
+    LED_PIN = 21  # BCM GPIO 21 = physical pin 40
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
+    HAS_GPIO = True
+except (ImportError, RuntimeError):
+    HAS_GPIO = False
+
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
@@ -42,6 +51,29 @@ pending_password = None    # password to connect to after user confirms
 def run(cmd):
     log.info("Running: %s", " ".join(cmd))
     return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def led_on():
+    """Turn LED on (solid — internet connected)."""
+    if HAS_GPIO:
+        GPIO.output(LED_PIN, GPIO.HIGH)
+
+
+def led_off():
+    """Turn LED off."""
+    if HAS_GPIO:
+        GPIO.output(LED_PIN, GPIO.LOW)
+
+
+def led_blink_twice():
+    """Blink LED twice to indicate failure."""
+    if not HAS_GPIO:
+        return
+    for _ in range(2):
+        GPIO.output(LED_PIN, GPIO.HIGH)
+        time.sleep(0.3)
+        GPIO.output(LED_PIN, GPIO.LOW)
+        time.sleep(0.3)
 
 
 def kill_panel_processes():
@@ -76,9 +108,11 @@ def try_connect(ssid: str, password: str):
     if result.returncode == 0:
         log.info("Connected successfully to %s", ssid)
         connection_status = True
+        led_on()
     else:
         log.warning("Failed to connect to %s: %s", ssid, result.stderr.strip())
         connection_status = False
+        led_blink_twice()
 
         log.info("Deleting failed connection profile for '%s'", ssid)
         run(["nmcli", "connection", "delete", ssid])
@@ -101,8 +135,10 @@ def connect_to_wifi(ssid: str, password: str):
 
     if result.returncode == 0:
         log.info("Connected successfully to %s", ssid)
+        led_on()
     else:
         log.warning("Failed to connect to %s: %s", ssid, result.stderr.strip())
+        led_blink_twice()
 
 
 @app.route("/")

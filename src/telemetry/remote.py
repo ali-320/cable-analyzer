@@ -125,12 +125,29 @@ def _json_or_none(value: Any) -> Any:
     return json.loads(value)
 
 
+# The Battery.ai ingest API only accepts probe / charge / auto.
+# Local-only modes must be normalised at the API boundary so the
+# session row is accepted; the original mode is preserved in probe_json.
+_API_ACCEPTED_MODES = frozenset({"probe", "charge", "auto"})
+
+
+def _inject_raw_mode(probe: dict | None, raw_mode: str, api_mode: str) -> dict | None:
+    """Attach the original local mode when it was normalised for the API."""
+    if raw_mode == api_mode:
+        return probe
+    probe = dict(probe) if probe else {}
+    probe["_raw_mode"] = raw_mode
+    return probe
+
+
 def session_payload(row: Any, device_id: str) -> dict[str, Any]:
     """Map one local SQLite session row to the ingest API schema."""
+    raw_mode = row["mode"] or "auto"
+    api_mode = raw_mode if raw_mode in _API_ACCEPTED_MODES else "probe"
     return {
         "session_id": row["session_id"],
         "device_id": device_id,
-        "mode": row["mode"],
+        "mode": api_mode,
         "v_target": row["v_target"],
         "length_m": row["length_m"],
         "phone_expected": bool(row["phone_expected"]),
@@ -139,7 +156,7 @@ def session_payload(row: Any, device_id: str) -> dict[str, Any]:
         "charging_detected": bool(row["charging_detected"]),
         "v_present": bool(row["v_present"]),
         "fault_reason": row["fault_reason"],
-        "probe_json": _json_or_none(row["probe_json"]),
+        "probe_json": _inject_raw_mode(_json_or_none(row["probe_json"]), raw_mode, api_mode),
         "verdict_json": _json_or_none(row["verdict_json"]),
         "created_at": row["created_at"],
     }

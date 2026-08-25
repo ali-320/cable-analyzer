@@ -13,6 +13,7 @@ from src.telemetry.remote import (
     IngestRestClient,
     client_from_config,
     load_env_file,
+    session_payload,
     sync_pending,
 )
 from src.telemetry.storage import Storage
@@ -184,6 +185,61 @@ class TestRemoteSync(unittest.TestCase):
         self.assertNotIn("on_conflict", request.full_url)
         self.assertEqual(request.get_header("Authorization"), "Bearer test-ingest-token")
         self.assertEqual(json.loads(request.data.decode("utf-8"))[0]["sample_index"], 0)
+
+
+class TestSessionPayload(unittest.TestCase):
+    """session_payload must normalise modes the API rejects."""
+
+    _ROW_TEMPLATE = {
+        "session_id": "sess-1",
+        "mode": "charge",
+        "v_target": 5.0,
+        "length_m": 1.0,
+        "phone_expected": 1,
+        "started_at": 100.0,
+        "ended_at": 200.0,
+        "charging_detected": 1,
+        "v_present": 1,
+        "fault_reason": None,
+        "probe_json": None,
+        "verdict_json": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    def _payload(self, mode: str):
+        row = dict(self._ROW_TEMPLATE)
+        row["mode"] = mode
+        return session_payload(row, "pi-zero-2w-01")
+
+    def test_probe_charge_auto_pass_through(self):
+        for mode in ("probe", "charge", "auto"):
+            self.assertEqual(self._payload(mode)["mode"], mode)
+
+    def test_continuous_normalised_to_probe(self):
+        p = self._payload("continuous")
+        self.assertEqual(p["mode"], "probe")
+
+    def test_continuous_preserves_raw_mode_in_probe_json(self):
+        p = self._payload("continuous")
+        self.assertEqual(p["probe_json"], {"_raw_mode": "continuous"})
+
+    def test_continuous_with_existing_probe_json_merges(self):
+        row = dict(self._ROW_TEMPLATE)
+        row["mode"] = "continuous"
+        row["probe_json"] = json.dumps({"voltage_classes": {"5.0": {}}})
+        p = session_payload(row, "pi-zero-2w-01")
+        self.assertEqual(p["mode"], "probe")
+        self.assertEqual(p["probe_json"]["_raw_mode"], "continuous")
+        self.assertIn("voltage_classes", p["probe_json"])
+
+    def test_voltage_normalised_to_probe(self):
+        self.assertEqual(self._payload("voltage")["mode"], "probe")
+
+    def test_none_mode_normalised_to_auto(self):
+        row = dict(self._ROW_TEMPLATE)
+        row["mode"] = None
+        p = session_payload(row, "pi-zero-2w-01")
+        self.assertEqual(p["mode"], "auto")
 
 
 if __name__ == "__main__":
