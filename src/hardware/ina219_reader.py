@@ -31,8 +31,6 @@ class INA219Reader:
         # INA219 reports positive current from VIN+ to VIN-. The current
         # hardware description feeds source VBUS to VIN- and the phone from
         # VIN+, so reverse the sign to obtain positive charging current.
-        direction = str(measurement.get("current_direction", "forward")).lower()
-        self.current_sign = -1.0 if direction in {"reverse", "inverted", "backward"} else 1.0
         self.bus_voltage_side = str(
             measurement.get("bus_voltage_side", "load")
         ).lower()
@@ -71,7 +69,7 @@ class INA219Reader:
             return self._sim.read(t)
         try:
             v_bus = float(self._ina.voltage())
-            i = self.current_sign * float(self._ina.current()) / 1000.0
+            i = abs(float(self._ina.current())) / 1000.0
             # If the source is connected to VIN- and the phone to VIN+, the
             # INA219 bus reading is source-side. Subtract the shunt drop to
             # expose the phone-side voltage used by metrics/rules.

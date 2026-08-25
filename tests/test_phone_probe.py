@@ -46,7 +46,6 @@ class TestPhoneInlineProbe(unittest.TestCase):
             },
         }
         reader = INA219Reader(cfg, simulate=True)
-        self.assertEqual(reader.current_sign, -1.0)
         self.assertEqual(reader.bus_voltage_side, "source")
 
     def test_manual_probe_accepts_rail_below_requested_pdo(self):
