@@ -1,0 +1,21 @@
+The wifi has been connected.
+It was not being connected first because the wlan0 was shut down and rfkill was blocking the wifi. I figured this out by
+running the commands:
+1. `ip link` (showed me that wlan0 is down).
+2. `rfkill` (showed me that both wifi and bluetooth are blocked).
+
+To fix this I ran:
+`sudo nmcli radio wifi on` (this ublocked wlan from the rfkill)
+`sudo ip link set wlan0 up` (This coverted the staet of wlan0 to up)
+
+Then I connected it to the internet using the following command:
+`nmcli device wifi connect <ssid> password <password> ifname wlan0`
+
+# Next issue
+The ssh is not working. 
+
+## Insights
+1. The service not enabled, ran `sudo systemctl status ssh`
+
+### fix
+ran: `sudo systemctl enable --now ssh`

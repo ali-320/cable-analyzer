@@ -17,6 +17,7 @@ sudo nmcli con mod hotspot wifi-sec.psk "raspberry"
 sudo nmcli con mod hotspot 802-11-wireless.mode ap
 sudo nmcli con mod hotspot 802-11-wireless.band bg
 sudo nmcli con mod hotspot 802-11-wireless.channel 7
+sudo nmcli con mod hotspot 802-11-wireless-security.pmf 1
 
 # --- One-time: Configure dnsmasq (DHCP server) ---
 sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig

@@ -1,8 +1,6 @@
 # Features Reference — `compute_features()`
 
-**Source:** `cable-analyzer/src/features/metrics.py::compute_features(...)`
-
-This file documents every engineered feature produced by the rule-based cable analyzer. The function receives a list of `Sample` objects (each: `t, voltage, current, power, state, valid, flags`) collected from the INA219 over the probe or charging session and returns a flat dictionary of features used by `rules.py::evaluate()` and the verdict pipeline.
+The program receives a list of `Sample` objects (each: `t, voltage, current, power, state, valid, flags`) collected from the INA219 over the probe or charging session and returns a flat dictionary of features used by `rules.py::evaluate()` and the verdict pipeline.
 
 The return dict contains **26 keys total** — **22 computed/engineered features** + **4 pass-through metadata fields**. Minimum data requirement: `len(busy_all) ≥ min_busy_samples` (default **5**); below this, the function returns `None` and no grade is produced.
 
@@ -12,12 +10,12 @@ The return dict contains **26 keys total** — **22 computed/engineered features
 
 For every sample in the session, the state labels already include any confirmed retroactive debounce corrections. The function then establishes three working lists:
 
-| Working variable | Definition |
-|------------------|-----------|
-| `analysis_samples` | all samples except `VERIFICATION`; verification rows remain in the CSV but are excluded from feature calculations | 
-| `busy_all` | non-`VERIFICATION` samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"CHARGING", "PROBE", "UNKNOWN", ""}` |
+| Working variable     | Definition                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `analysis_samples`   | all samples except `VERIFICATION`; verification rows remain in the CSV but are excluded from feature calculations                                                                     |
+| `busy_all`           | The samples where `valid == True` AND `current ≥ i_min_compute` (default `0.10 A`) AND `state ∈ {"CHARGING", "PROBE", "UNKNOWN", ""}`                                                 |
 | `busy` (steady-only) | subset of `busy_all` where `current ≥ steady_frac · peak_i` (`steady_frac = 0.5`) — used for stability features so the phone's current ramp-up / CC→CV taper-down do not pollute them |
-| `valid` | valid non-`VERIFICATION` samples (range-checked I²C reads); verification rows remain available in the CSV but are excluded from features |
+| `valid`              | valid non-`VERIFICATION` samples (range-checked I²C reads); verification rows remain available in the CSV but are excluded from features                                              |
 
 Per-sample derived quantities (used in #1–8 below):
 

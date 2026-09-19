@@ -1,0 +1,39 @@
+CONSTRAINTS
+1. The testing cable must carry the USB-C CC lines correctly. If the cable has a CC/PD signaling fault, the CH224K may be unable to negotiate higher voltages even if VBUS is physically present.
+
+2. The voltage should be between 0 and 26. (INA-219 bus limit)
+
+3. The current should be between -1 to 3.5 (depends on shunt FSR?)
+
+4. When the drdt_self_heating_mohm_per_min = 5.0, it means that the wire is self heating and it send it to at least grade D.
+
+5. The current_direction = "reverse" right now in config.toml, because the current flows from the vin negative to vin positive
+   of the INA219. 
+
+
+CURRENT CONSTRAINTS (--voltage --continuous build, Pi Zero W / Trixie Lite)
+- No CH224K: the charger's own voltage is used; higher-voltage behavior can only be
+  observed if the charger/phone negotiates it natively (bucketed into 1 V classes).
+- The phone is the only load: no controlled current steps; reliable resistance math
+  needs the phone's draw to vary by at least 0.1 A (current spread) and reach
+  i_min_compute = 0.10 A.
+- A verdict requires 3000 busy readings (session.min_busy_readings); below that,
+  continuous mode gives no verdict and keeps waiting.
+- Per-metre grading needs measurement.length_m; without it the raw loop value is used
+  and the verdict carries a limitation note.
+- Calibration baseline (data/calibration.json) must exist and must come from the same
+  wiring/conditions as the tests it is subtracted from.
+- Hardware limits: INA219 bus voltage <= 26 V, measurable current within the 0.1 ohm
+  shunt range (keep <= 3.0 A); V > 26 V or I > 3.2 A latches a FAULT.
+- Known open issue: transient I2C Errno 5 at configure(), and uncaught
+  DeviceRangeError/SaturationRangeError in read_sample() can crash the service on
+  current spikes (~3.2 A); fix agreed, not yet applied.
+- i2cdetect shows nothing while the service is running (probe writes collide with live
+  traffic) — this is expected, not a sensor failure.
+- Pi Zero W is single-core, 512 MB, 32-bit ARMv6: effective sample rate may fall below
+  the configured 25 Hz; cycles simply take longer (features are period-adaptive).
+- Trixie 32-bit: pip wheels can lag for ARMv6; prefer apt packages (python3-pil, fonts,
+  RPi.GPIO, spidev) with a --system-site-packages venv.
+- rfkill soft-block / wlan0 down can reappear after reboot; hotspot-start.sh does not
+  unblock them, so a blocked radio would wrongly fall through to hotspot mode.
+
